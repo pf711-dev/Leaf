@@ -1,0 +1,73 @@
+/* ============================================================
+   Notion-inspired light theme
+   暖灰中性色 / Inter 无衬线 / 半透明悬停 / 内容优先
+   ============================================================ */
+:root {
+  /* 字体：Inter 无衬线为主，贴近 Notion 体感 */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+
+  /* 背景层级 —— 暖白系 */
+  --bg: #ffffff; /* 主区底色 */
+  --bg-sidebar: #f7f6f3; /* 侧栏暖米白 */
+  --bg-hover: rgba(55, 53, 47, 0.06); /* 悬停：Notion 标志性半透明叠层 */
+  --bg-active: rgba(55, 53, 47, 0.09); /* 选中 */
+  --bg-card: #f7f6f3; /* 卡片底 */
+
+  /* 边框 —— 极淡暖灰，非冷色 */
+  --border: rgba(55, 53, 47, 0.09);
+  --border-strong: rgba(55, 53, 47, 0.16);
+
+  /* 文本层级 —— 暖近黑系 */
+  --text: #37352f; /* 主文本（暖近黑） */
+  --text-dim: #6b6a64; /* 次要文本 */
+  --text-faint: #9b9a97; /* 最弱文本 */
+
+  /* 强调：Notion 蓝 */
+  --accent: #37352f; /* 默认强调用暖近黑 */
+  --accent-blue: #0b6e99; /* 链接/主按钮 */
+  --accent-blue-hover: #095d82; /* 主按钮 hover（加深一档） */
+  --select-bg: #e9f3f7; /* 选中底色（浅蓝） */
+
+  /* 状态色 */
+  --danger: #c4554d; /* 删除/危险（暖红） */
+
+  font-family: var(--font-sans);
+  background-color: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* 滚动条 —— Notion 风纤细暖灰 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(55, 53, 47, 0.14);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(55, 53, 47, 0.24);
+  background-clip: padding-box;
+}
