@@ -9,6 +9,8 @@ Leaf 是一个轻量级的桌面应用，用于管理、浏览 HTML 文档。
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#平台支持)
 
+<img src="docs/cover.png" alt="Leaf 产品介绍" />
+
 </div>
 
 ## 功能特性
