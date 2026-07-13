@@ -79,19 +79,6 @@ impl Database {
         rows.collect()
     }
 
-    pub fn get(&self, id: &str) -> rusqlite::Result<Option<Document>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, title, file_name, library_path, file_size, summary, imported_at, source_created_at
-             FROM documents WHERE id = ?1",
-        )?;
-        let mut rows = stmt.query_map(params![id], row_to_document)?;
-        match rows.next() {
-            Some(r) => Ok(Some(r?)),
-            None => Ok(None),
-        }
-    }
-
     pub fn delete(&self, id: &str) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM documents WHERE id = ?1", params![id])?;

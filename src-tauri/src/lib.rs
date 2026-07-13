@@ -1,3 +1,7 @@
+// 抑制 vendored 的 mac_rounded_corners 插件中 objc 0.2 宏触发的 cfg 警告。
+// 该警告来自上游 objc crate，与本项目代码无关，无法在插件源码侧修复。
+#![allow(unexpected_cfgs)]
+
 mod commands;
 mod db;
 mod library;

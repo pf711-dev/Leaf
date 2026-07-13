@@ -3,6 +3,24 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "description": "基于 Tauri + Vue 3 的本地 HTML 文档阅读库",
+  "author": "pf711-dev",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pf711-dev/leaf.git"
+  },
+  "homepage": "https://github.com/pf711-dev/leaf#readme",
+  "bugs": {
+    "url": "https://github.com/pf711-dev/leaf/issues"
+  },
+  "keywords": [
+    "tauri",
+    "vue",
+    "html-reader",
+    "document-library",
+    "rust"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
