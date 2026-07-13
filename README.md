@@ -23,8 +23,9 @@ Leaf 是一个轻量级的桌面应用，用于管理、浏览 HTML 文档。
 
 前往 [Releases 页面](https://github.com/pf711-dev/leaf/releases)，下载最新版本的： **macOS**：`Leaf_x.x.x_aarch64.dmg`（Apple Silicon）— 双击打开，将 Leaf 拖入 Applications 文件夹
 
-> 首次打开若提示"无法验证开发者"，前往 **系统设置 → 隐私与安全性**，点击"仍要打开"。
-
+> 首次打开若提示「Leaf 已损坏，无法打开」，这是因为应用暂未经 Apple 公证。可用以下任一方式解决：
+> 1. 终端：执行 xattr -dr com.apple.quarantine /Applications/Leaf.app（路径按实际安装位置替换）
+> 2. 系统设置：打开 系统设置 → 隐私与安全性，在底部找到 Leaf 的提示，点「仍要打开」
 
 ## 贡献
 
