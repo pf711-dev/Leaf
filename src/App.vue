@@ -8,6 +8,7 @@ import DocumentListItem from "./components/DocumentListItem.vue";
 import TocPanel from "./components/TocPanel.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
 import { enableModernWindowStyle } from "@cloudworxx/tauri-plugin-mac-rounded-corners";
+import { PanelLeftOpen, PanelLeftClose } from "@lucide/vue";
 import type { Document } from "./types/document";
 
 const store = useDocumentsStore();
@@ -26,14 +27,31 @@ const iframeRef = ref<HTMLIFrameElement | null>(null);
 
 const hasDocuments = computed(() => store.documents.length > 0);
 
+// 侧边栏展开/收起（默认展开，不持久化）
+const sidebarCollapsed = ref(false);
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value;
+}
+
+/** Cmd/Ctrl + B 切换侧边栏 */
+function onKeydown(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
+    e.preventDefault();
+    toggleSidebar();
+  }
+}
+
 onMounted(() => {
   window.addEventListener("message", onIframeMessage);
+  window.addEventListener("keydown", onKeydown);
   store.refresh();
   enableModernWindowStyle();
 });
 
 onUnmounted(() => {
   window.removeEventListener("message", onIframeMessage);
+  window.removeEventListener("keydown", onKeydown);
 });
 
 /** 接收 iframe 内脚本报回的当前章节高亮 */
@@ -112,6 +130,18 @@ function onDragOver(e: DragEvent) {
     <!-- 顶部栏（data-tauri-drag-region 使整个顶栏可拖动窗口） -->
     <header class="topbar" data-tauri-drag-region>
       <div class="topbar-left">
+        <div class="topbar-traffic-pad" aria-hidden="true" data-tauri-drag-region></div>
+        <button
+          class="sidebar-toggle"
+          :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
+          :aria-expanded="!sidebarCollapsed"
+          :aria-label="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
+          aria-controls="sidebar"
+          @click="toggleSidebar"
+        >
+          <PanelLeftClose v-if="!sidebarCollapsed" :size="14" :stroke-width="1.5" />
+          <PanelLeftOpen v-else :size="14" :stroke-width="1.5" />
+        </button>
         <span class="brand" data-tauri-drag-region>Leaf</span>
       </div>
       <div class="topbar-right">
@@ -125,30 +155,32 @@ function onDragOver(e: DragEvent) {
     <!-- 主内容：左右分栏 -->
     <main class="content">
       <!-- 左侧：文档列表 -->
-      <aside class="sidebar">
-        <div class="sidebar-head">
-          <span>文档</span>
-        </div>
-
-        <div class="sidebar-body">
-          <p v-if="store.loading" class="status">加载中…</p>
-          <p v-else-if="store.error" class="status error">{{ store.error }}</p>
-
-          <!-- 空状态 -->
-          <div v-else-if="!hasDocuments" class="empty-list">
-            <p class="empty-line">暂无文档</p>
-            <p class="empty-hint">点击右上角「+ 导入」添加 HTML 文件</p>
+      <aside id="sidebar" class="sidebar" :class="{ collapsed: sidebarCollapsed }">
+        <div class="sidebar-inner">
+          <div class="sidebar-head">
+            <span>文档</span>
           </div>
 
-          <!-- 列表 -->
-          <DocumentListItem
-            v-else
-            v-for="doc in store.documents"
-            :key="doc.id"
-            :doc="doc"
-            :active="currentDoc?.id === doc.id"
-            @click="selectDoc(doc)"
-          />
+          <div class="sidebar-body">
+            <p v-if="store.loading" class="status">加载中…</p>
+            <p v-else-if="store.error" class="status error">{{ store.error }}</p>
+
+            <!-- 空状态 -->
+            <div v-else-if="!hasDocuments" class="empty-list">
+              <p class="empty-line">暂无文档</p>
+              <p class="empty-hint">点击右上角「+ 导入」添加 HTML 文件</p>
+            </div>
+
+            <!-- 列表 -->
+            <DocumentListItem
+              v-else
+              v-for="doc in store.documents"
+              :key="doc.id"
+              :doc="doc"
+              :active="currentDoc?.id === doc.id"
+              @click="selectDoc(doc)"
+            />
+          </div>
         </div>
       </aside>
 
@@ -228,10 +260,15 @@ function onDragOver(e: DragEvent) {
   gap: 10px;
   font-size: 13px;
 }
+/* macOS 红黄绿按钮的结构性留白，按钮/品牌不再用 margin 避让 */
+.topbar-traffic-pad {
+  width: 68px;
+  flex-shrink: 0;
+  height: 100%;
+}
 .brand {
   color: var(--text);
   font-weight: 600;
-  margin-left: 68px;
 }
 .topbar-right {
   display: flex;
@@ -292,8 +329,37 @@ function onDragOver(e: DragEvent) {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;            /* 收起时裁切内容，配合 .sidebar-inner 固定宽度 */
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
+  transition: width 0.25s ease, border-color 0.25s ease;
+}
+.sidebar.collapsed {
+  width: 0;
+  border-right-color: transparent;
+}
+.sidebar-inner {
+  width: 260px;                /* 内容保持 260px，外层收缩时被裁切而非被挤压 */
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.sidebar-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 .sidebar-head {
   padding: 14px 14px 8px;
