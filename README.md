@@ -10,7 +10,6 @@ AI 生成了太多 HTML 报告，但你找不到一个顺手的管理工具。**
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#平台支持)
 
 <img src="docs/cover.png" alt="Leaf 产品介绍" />
-*界面截图：左侧为文档库列表，右侧为 HTML 渲染与目录导航*
 
 </div>
 
@@ -22,7 +21,6 @@ AI 生成了太多 HTML 报告，但你找不到一个顺手的管理工具。**
 - **目录提取** — 自动从文档中提取目录，快速跳转，长报告也不怕
 - **本地索引** — 基于 SQLite 索引，启动即用，离线可用，数据完全在本地
 
-## 下载安装
 
 ## 下载安装
 
@@ -41,7 +39,6 @@ AI 生成了太多 HTML 报告，但你找不到一个顺手的管理工具。**
 - **方式二（终端）**：打开终端，粘贴运行以下命令后重试：
   ```bash
   xattr -dr com.apple.quarantine /Applications/Leaf.app
-
 
 ## 贡献
 
