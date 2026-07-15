@@ -1,7 +1,7 @@
 {
   "name": "leaf",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "基于 Tauri + Vue 3 的本地 HTML 文档阅读库",
   "author": "pf711-dev",

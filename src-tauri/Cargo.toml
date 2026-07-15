@@ -1,6 +1,6 @@
 [package]
 name = "leaf"
-version = "0.1.0"
+version = "0.1.1"
 description = "基于 Tauri 的本地 HTML 文档阅读库"
 authors = ["pf711-dev"]
 license = "Apache-2.0"

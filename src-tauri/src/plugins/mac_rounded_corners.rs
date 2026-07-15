@@ -121,13 +121,22 @@ pub fn enable_modern_window_style<R: Runtime>(
                     
                     let content_view = ns_window.contentView();
                     content_view.setWantsLayer(cocoa::base::YES);
-                    
+
                     let layer: id = msg_send![content_view, layer];
                     if !layer.is_null() {
                         let _: () = msg_send![layer, setCornerRadius: radius];
                         let _: () = msg_send![layer, setMasksToBounds: cocoa::base::YES];
+                        // content_view 的 layer 默认有白色背景，圆角边缘会透出白线。
+                        // 设为透明，让背景完全由 WebView 内容控制。
+                        let transparent: id = msg_send![objc::class!(NSColor), clearColor];
+                        let cg_color: id = msg_send![transparent, CGColor];
+                        let _: () = msg_send![layer, setBackgroundColor: cg_color];
                     }
-                    
+
+                    // 让 WKWebView 不绘制白色背景，避免圆角窗口边缘透出白线。
+                    // WKWebView 是 contentView 的子视图（可能有中间容器，递归查找）。
+                    set_webview_transparent(content_view);
+
                     position_traffic_lights(ns_window, config.offset_x, config.offset_y);
                 }
             })
@@ -213,5 +222,33 @@ unsafe fn position_traffic_lights(ns_window: id, offset_x: f64, offset_y: f64) {
             frame.size,
         );
         let _: () = msg_send![zoom_button, setFrame: new_frame];
+    }
+}
+
+/// 递归遍历视图树，找到 WKWebView 并通过 KVC 设置 drawsBackground = NO，
+/// 让 WebView 不绘制默认白色背景，避免圆角窗口边缘透出白线。
+#[cfg(target_os = "macos")]
+unsafe fn set_webview_transparent(view: id) {
+    if view.is_null() {
+        return;
+    }
+    // 用 isKindOfClass: 判断是否为 WKWebView（用类名查找类对象）
+    let wk_class: id = msg_send![objc::class!(WKWebView), class];
+    let is_wk: bool = msg_send![view, isKindOfClass: wk_class];
+    if is_wk {
+        // KVC: [view setValue:@(NO) forKey:@"drawsBackground"]
+        let no_value: id = msg_send![objc::class!(NSNumber), numberWithBool: cocoa::base::NO];
+        // [NSString stringWithUTF8String:"drawsBackground"]
+        let key: id = msg_send![objc::class!(NSString), stringWithUTF8String: b"drawsBackground\0".as_ptr() as *const i8];
+        let _: () = msg_send![view, setValue: no_value forKey: key];
+        return;
+    }
+
+    // 递归查找子视图
+    let subviews: id = msg_send![view, subviews];
+    let count: usize = msg_send![subviews, count];
+    for i in 0..count {
+        let subview: id = msg_send![subviews, objectAtIndex: i];
+        set_webview_transparent(subview);
     }
 }

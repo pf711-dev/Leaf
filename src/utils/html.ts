@@ -39,6 +39,7 @@ export function preparePreviewHtml(html: string, tocItems: TocItem[]): string {
   const anchorIds = JSON.stringify(tocItems.map((t) => t.id));
 
   const injected = `<style id="_preview_fix">
+html,body{margin:0;padding:0;}
 html{min-width:1024px;}
 .toc{display:none !important;}
 .layout{grid-template-columns:1fr !important;}
@@ -66,6 +67,10 @@ html{min-width:1024px;}
   }
   window.addEventListener("scroll",report,{passive:true});
   report();
+  // iframe 获得焦点时，Esc 无法冒泡到父窗口，这里转发给父级处理
+  window.addEventListener("keydown",function(e){
+    if(e.key==="Escape"){parent.postMessage({type:"esc"},"*");}
+  });
 })();
 <\/script>`;
 

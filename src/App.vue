@@ -36,8 +36,48 @@ function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value;
 }
 
-/** Cmd/Ctrl + B 切换侧边栏 */
+// 演示（沉浸式）模式
+const presenting = ref(false);
+const sidebarWasCollapsed = ref(false);
+const presentHintVisible = ref(false);
+let presentHintTimer: ReturnType<typeof setTimeout> | null = null;
+
+function enterPresent() {
+  sidebarWasCollapsed.value = sidebarCollapsed.value;
+  sidebarCollapsed.value = true;
+  presenting.value = true;
+  // 短暂提示「按 Esc 退出」，2.5 秒后淡出
+  showPresentHint();
+}
+
+function exitPresent() {
+  presenting.value = false;
+  sidebarCollapsed.value = sidebarWasCollapsed.value;
+  hidePresentHint();
+}
+
+function showPresentHint() {
+  presentHintVisible.value = true;
+  if (presentHintTimer) clearTimeout(presentHintTimer);
+  presentHintTimer = setTimeout(() => {
+    presentHintVisible.value = false;
+  }, 2500);
+}
+
+function hidePresentHint() {
+  presentHintVisible.value = false;
+  if (presentHintTimer) {
+    clearTimeout(presentHintTimer);
+    presentHintTimer = null;
+  }
+}
+
+/** Esc 退出演示 / Cmd+B 切换侧边栏 */
 function onKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape" && presenting.value) {
+    exitPresent();
+    return;
+  }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
     e.preventDefault();
     toggleSidebar();
@@ -56,10 +96,13 @@ onUnmounted(() => {
   window.removeEventListener("keydown", onKeydown);
 });
 
-/** 接收 iframe 内脚本报回的当前章节高亮 */
+/** 接收 iframe 内脚本回报的当前章节高亮 / Esc 按键 */
 function onIframeMessage(e: MessageEvent) {
   if (e.data?.type === "toc-active") {
     activeTocId.value = e.data.id || "";
+  } else if (e.data?.type === "esc" && presenting.value) {
+    // iframe 获得焦点时 Esc 无法冒泡到父窗口，由注入脚本转发过来
+    exitPresent();
   }
 }
 
@@ -208,13 +251,13 @@ function onDragOver(e: DragEvent) {
 </script>
 
 <template>
-  <div class="app" @drop="onDrop" @dragover="onDragOver">
+  <div class="app" :class="{ presenting: presenting }" @drop="onDrop" @dragover="onDragOver">
     <!-- 顶部栏（data-tauri-drag-region 使整个顶栏可拖动窗口） -->
     <header class="topbar" data-tauri-drag-region>
       <div class="topbar-left">
         <div class="topbar-traffic-pad" aria-hidden="true" data-tauri-drag-region></div>
         <button
-          class="sidebar-toggle"
+          class="icon-btn sidebar-toggle"
           :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
           :aria-expanded="!sidebarCollapsed"
           :aria-label="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
@@ -227,7 +270,13 @@ function onDragOver(e: DragEvent) {
         <span class="brand" data-tauri-drag-region>Leaf</span>
       </div>
       <div class="topbar-right">
-        <span v-if="hasDocuments" class="count">{{ store.documents.length }} 篇</span>
+        <button
+          class="btn"
+          :disabled="!currentDoc"
+          @click="enterPresent"
+        >
+          演示
+        </button>
         <button class="btn btn-primary" @click="pickAndImport" :disabled="store.importing > 0">
           {{ store.importing > 0 ? "导入中…" : "导入" }}
         </button>
@@ -241,6 +290,7 @@ function onDragOver(e: DragEvent) {
         <div class="sidebar-inner">
           <div class="sidebar-head">
             <span>文档</span>
+            <span v-if="hasDocuments" class="sidebar-count">{{ store.documents.length }} 篇</span>
           </div>
 
           <div class="sidebar-body">
@@ -272,6 +322,12 @@ function onDragOver(e: DragEvent) {
         <!-- 有文档选中 -->
         <template v-if="currentDoc">
           <div class="preview-body">
+            <!-- 沉浸模式：进入时短暂提示 -->
+            <transition name="fade">
+              <div v-if="presentHintVisible" class="present-hint">
+                按 <kbd>Esc</kbd> 退出演示
+              </div>
+            </transition>
             <p v-if="loadingContent" class="status">加载中…</p>
             <template v-else-if="currentHtml">
               <iframe
@@ -338,6 +394,7 @@ function onDragOver(e: DragEvent) {
   display: flex;
   flex-direction: column;
   height: 100%;
+  background: var(--bg-sidebar);
 }
 
 /* ---------- 顶部栏 ---------- */
@@ -441,7 +498,8 @@ function onDragOver(e: DragEvent) {
   display: flex;
   flex-direction: column;
 }
-.sidebar-toggle {
+/* 通用图标按钮（侧边栏切换、演示等共用） */
+.icon-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -454,15 +512,30 @@ function onDragOver(e: DragEvent) {
   cursor: pointer;
   transition: background 0.1s;
 }
-.sidebar-toggle:hover {
+.icon-btn:hover {
   background: var(--bg-hover);
   color: var(--text);
 }
+.icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* 侧边栏切换按钮专属：避让 macOS 红黄绿按钮 */
+.sidebar-toggle {
+  margin-left: 68px;
+}
 .sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 14px 14px 8px;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-dim);
+}
+.sidebar-count {
+  font-weight: 400;
+  color: var(--text-faint);
 }
 .sidebar-body {
   flex: 1;
@@ -506,6 +579,38 @@ function onDragOver(e: DragEvent) {
   min-height: 0;
   position: relative;
   background: #ffffff;
+}
+
+/* 沉浸模式：隐藏顶栏（侧栏已由 sidebarCollapsed 收起） */
+.app.presenting .topbar {
+  display: none;
+}
+/* 沉浸模式：进入时的短暂提示（toast） */
+.present-hint {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: var(--bg-sidebar);
+  box-shadow: rgba(15, 15, 15, 0.05) 0px 0px 0px 1px,
+    rgba(15, 15, 15, 0.1) 0px 3px 6px, rgba(15, 15, 15, 0.2) 0px 9px 24px;
+  font-size: 13px;
+  color: var(--text-dim);
+  z-index: 20;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.present-hint kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  margin: 0 2px;
+  border-radius: 3px;
+  background: var(--bg-active);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--text);
 }
 .preview-iframe {
   position: absolute;

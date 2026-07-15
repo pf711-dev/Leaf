@@ -33,12 +33,19 @@
   --danger: #c4554d; /* 删除/危险（暖红） */
 
   font-family: var(--font-sans);
-  background-color: var(--bg);
   color: var(--text);
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* WebView 根背景透明：避免圆角窗口边缘透出白线。
+   白色背景由各区域（.topbar/.sidebar/.preview）自行设置。 */
+html,
+body,
+#app {
+  background: transparent;
 }
 
 html,
