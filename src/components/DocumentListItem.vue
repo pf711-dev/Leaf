@@ -2,15 +2,21 @@
 import type { Document } from "../types/document";
 import { formatDate, formatSize } from "../utils/format";
 
-defineProps<{ doc: Document; active: boolean }>();
+const props = defineProps<{ doc: Document; active: boolean }>();
+
+const emit = defineEmits<{
+  contextmenu: [doc: Document, event: MouseEvent]
+}>();
+
+function onContextMenu(e: MouseEvent) {
+  emit("contextmenu", props.doc, e);
+}
 </script>
 
 <template>
-  <div class="list-item" :class="{ active }">
-    <div class="title">{{ doc.title }}</div>
+  <div class="list-item" :class="{ active }" @contextmenu="onContextMenu">
+    <div class="title">{{ doc.fileName }}</div>
     <div class="meta">
-      <span class="meta-name">{{ doc.fileName }}</span>
-      <span class="meta-sep">·</span>
       <span>{{ formatSize(doc.fileSize) }}</span>
       <span class="meta-sep">·</span>
       <span>{{ formatDate(doc.importedAt) }}</span>

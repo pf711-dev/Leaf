@@ -25,6 +25,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::import_files,
+            commands::check_import_conflicts,
+            commands::get_document_path,
             commands::list_documents,
             commands::read_document_content,
             commands::delete_document,

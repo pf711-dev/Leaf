@@ -1,7 +1,13 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import type { Document } from "../types/document";
-import { deleteDocument, importFiles, listDocuments } from "../api/client";
+import type { ConflictInfo, Document } from "../types/document";
+import {
+  checkImportConflicts,
+  deleteDocument,
+  importFiles,
+  listDocuments,
+} from "../api/client";
+import type { ConflictResolution } from "../api/client";
 
 export const useDocumentsStore = defineStore("documents", () => {
   /** 全部文档，按导入时间倒序 */
@@ -26,13 +32,23 @@ export const useDocumentsStore = defineStore("documents", () => {
     }
   }
 
-  /** 导入文件。paths 是源文件的绝对路径列表。返回成功导入的文档数量。 */
-  async function importPaths(paths: string[]): Promise<number> {
+  /** 预检导入冲突：返回撞名清单（由组件层决定如何弹窗）。 */
+  async function checkConflicts(paths: string[]): Promise<ConflictInfo[]> {
+    return checkImportConflicts(paths);
+  }
+
+  /**
+   * 执行导入。resolution 由用户在冲突弹窗中选择后传入。
+   * 返回成功导入的文档数量。
+   */
+  async function importWithResolution(
+    paths: string[],
+    resolution?: ConflictResolution,
+  ): Promise<number> {
     if (paths.length === 0) return 0;
     importing.value += paths.length;
     try {
-      const imported = await importFiles(paths);
-      // 导入成功后刷新列表，保证顺序正确
+      const imported = await importFiles(paths, resolution);
       await refresh();
       return imported.length;
     } finally {
@@ -46,5 +62,14 @@ export const useDocumentsStore = defineStore("documents", () => {
     documents.value = documents.value.filter((d) => d.id !== id);
   }
 
-  return { documents, loading, error, importing, refresh, importPaths, remove };
+  return {
+    documents,
+    loading,
+    error,
+    importing,
+    refresh,
+    checkConflicts,
+    importWithResolution,
+    remove,
+  };
 });

@@ -15,3 +15,15 @@ export interface Document {
   /** 原文件创建时间，Unix 毫秒 */
   sourceCreatedAt: number
 }
+
+/** 一条「待导入文件与库内已有文档撞名」的预检结果。 */
+export interface ConflictInfo {
+  /** 待导入源文件的绝对路径 */
+  sourcePath: string
+  /** 撞名的原始文件名（如 "default.html"） */
+  fileName: string
+  /** 库中已存在文档的 id */
+  existingDocId: string
+  /** 库中已存在文档的标题（弹窗展示用） */
+  existingTitle: string
+}

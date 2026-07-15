@@ -2,14 +2,16 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useDocumentsStore } from "./stores/documents";
-import { readDocumentContent } from "./api/client";
+import { getDocumentPath, readDocumentContent } from "./api/client";
 import { extractToc, preparePreviewHtml, type TocItem } from "./utils/html";
 import DocumentListItem from "./components/DocumentListItem.vue";
 import TocPanel from "./components/TocPanel.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
+import ConflictDialog from "./components/ConflictDialog.vue";
+import ContextMenu from "./components/ContextMenu.vue";
 import { enableModernWindowStyle } from "@cloudworxx/tauri-plugin-mac-rounded-corners";
 import { PanelLeftOpen, PanelLeftClose } from "@lucide/vue";
-import type { Document } from "./types/document";
+import type { ConflictInfo, Document } from "./types/document";
 
 const store = useDocumentsStore();
 
@@ -61,6 +63,11 @@ function onIframeMessage(e: MessageEvent) {
   }
 }
 
+// 导入冲突弹窗
+const conflictVisible = ref(false);
+const conflictList = ref<ConflictInfo[]>([]);
+const pendingPaths = ref<string[]>([]);
+
 async function pickAndImport() {
   const selected = await open({
     multiple: true,
@@ -68,7 +75,53 @@ async function pickAndImport() {
   });
   if (!selected) return;
   const paths = Array.isArray(selected) ? selected : [selected];
-  await store.importPaths(paths);
+  await tryImport(paths);
+}
+
+/** 预检冲突 → 无冲突直接导入，有冲突弹窗等用户选择 */
+async function tryImport(paths: string[]) {
+  const conflicts = await store.checkConflicts(paths);
+  if (conflicts.length > 0) {
+    pendingPaths.value = paths;
+    conflictList.value = conflicts;
+    conflictVisible.value = true;
+  } else {
+    await store.importWithResolution(paths);
+  }
+}
+
+/** 用户在冲突弹窗选「全部跳过」 */
+async function onConflictSkip() {
+  conflictVisible.value = false;
+  // 跳过所有撞名文件，只导入非冲突项
+  await store.importWithResolution(pendingPaths.value, "skip");
+  pendingPaths.value = [];
+  conflictList.value = [];
+}
+
+/** 用户在冲突弹窗选「全部覆盖」 */
+async function onConflictOverwrite() {
+  conflictVisible.value = false;
+  await store.importWithResolution(pendingPaths.value, "overwrite");
+  pendingPaths.value = [];
+  conflictList.value = [];
+}
+
+/** 用户在冲突弹窗选「取消」 */
+function onConflictCancel() {
+  conflictVisible.value = false;
+  pendingPaths.value = [];
+  conflictList.value = [];
+}
+
+/** 复制当前文档的库内绝对路径到剪贴板 */
+async function copyPath(doc: Document) {
+  try {
+    const path = await getDocumentPath(doc.libraryPath);
+    await navigator.clipboard.writeText(path);
+  } catch (e) {
+    console.error("复制路径失败:", e);
+  }
 }
 
 async function selectDoc(doc: Document) {
@@ -111,6 +164,35 @@ async function doDelete() {
     tocItems.value = [];
   }
   pendingDelete.value = null;
+}
+
+// 右键菜单
+const contextMenuVisible = ref(false);
+const contextMenuX = ref(0);
+const contextMenuY = ref(0);
+const contextMenuDoc = ref<Document | null>(null);
+
+/** 列表项右键 → 弹出菜单 */
+function onItemContextMenu(doc: Document, e: MouseEvent) {
+  e.preventDefault();
+  contextMenuDoc.value = doc;
+  contextMenuX.value = e.clientX;
+  contextMenuY.value = e.clientY;
+  contextMenuVisible.value = true;
+}
+
+function onContextCopyPath() {
+  contextMenuVisible.value = false;
+  const doc = contextMenuDoc.value;
+  if (doc) copyPath(doc);
+  contextMenuDoc.value = null;
+}
+
+function onContextDelete() {
+  contextMenuVisible.value = false;
+  const doc = contextMenuDoc.value;
+  if (doc) removeDoc(doc);
+  contextMenuDoc.value = null;
 }
 
 // 拖拽导入：拖到窗口任意位置
@@ -171,15 +253,16 @@ function onDragOver(e: DragEvent) {
               <p class="empty-hint">点击右上角「+ 导入」添加 HTML 文件</p>
             </div>
 
-            <!-- 列表 -->
-            <DocumentListItem
-              v-else
-              v-for="doc in store.documents"
-              :key="doc.id"
-              :doc="doc"
-              :active="currentDoc?.id === doc.id"
-              @click="selectDoc(doc)"
-            />
+          <!-- 列表 -->
+          <DocumentListItem
+            v-else
+            v-for="doc in store.documents"
+            :key="doc.id"
+            :doc="doc"
+            :active="currentDoc?.id === doc.id"
+            @click="selectDoc(doc)"
+            @contextmenu="(doc, event) => onItemContextMenu(doc, event)"
+          />
           </div>
         </div>
       </aside>
@@ -188,11 +271,6 @@ function onDragOver(e: DragEvent) {
       <section class="preview">
         <!-- 有文档选中 -->
         <template v-if="currentDoc">
-          <div class="preview-head">
-            <span class="preview-title" :title="currentDoc.title">{{ currentDoc.title }}</span>
-            <span class="preview-path">{{ currentDoc.fileName }}</span>
-            <button class="btn btn-ghost btn-danger" @click="removeDoc(currentDoc)">删除</button>
-          </div>
           <div class="preview-body">
             <p v-if="loadingContent" class="status">加载中…</p>
             <template v-else-if="currentHtml">
@@ -232,6 +310,25 @@ function onDragOver(e: DragEvent) {
       :danger="true"
       @confirm="doDelete"
       @cancel="confirmVisible = false; pendingDelete = null"
+    />
+
+    <!-- 导入冲突弹窗 -->
+    <ConflictDialog
+      :visible="conflictVisible"
+      :conflicts="conflictList"
+      @skip="onConflictSkip"
+      @overwrite="onConflictOverwrite"
+      @cancel="onConflictCancel"
+    />
+
+    <!-- 列表项右键菜单 -->
+    <ContextMenu
+      :visible="contextMenuVisible"
+      :x="contextMenuX"
+      :y="contextMenuY"
+      @copy-path="onContextCopyPath"
+      @delete="onContextDelete"
+      @close="contextMenuVisible = false"
     />
   </div>
 </template>
@@ -403,33 +500,6 @@ function onDragOver(e: DragEvent) {
   display: flex;
   flex-direction: column;
   background: var(--bg);
-}
-.preview-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  height: 44px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.preview-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.preview-path {
-  font-size: 12px;
-  color: var(--text-faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.preview-head .btn {
-  margin-left: auto;
 }
 .preview-body {
   flex: 1;

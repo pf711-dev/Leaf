@@ -84,6 +84,26 @@ impl Database {
         conn.execute("DELETE FROM documents WHERE id = ?1", params![id])?;
         Ok(())
     }
+
+    /// 返回所有文档的库内相对路径（library_path），用于生成可读文件名时的冲突检测。
+    pub fn list_library_paths(&self) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT library_path FROM documents")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    /// 按原始文件名（file_name）查找文档，用于导入去重预检。
+    /// 返回所有匹配的文档（理论上 file_name 不唯一，同名不同内容会有多条）。
+    pub fn find_by_filename(&self, file_name: &str) -> rusqlite::Result<Vec<Document>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, title, file_name, library_path, file_size, summary, imported_at, source_created_at
+             FROM documents WHERE file_name = ?1",
+        )?;
+        let rows = stmt.query_map(params![file_name], row_to_document)?;
+        rows.collect()
+    }
 }
 
 fn row_to_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<Document> {
