@@ -9,7 +9,7 @@ AI 生成了太多 HTML 报告，但你找不到一个顺手的管理工具。**
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#平台支持)
 
-<img src="docs/cover.png" alt="Leaf 产品介绍" />
+<img src="docs/Leaf.png" alt="Leaf 产品介绍" />
 
 </div>
 
