@@ -257,17 +257,18 @@ function onDragOver(e: DragEvent) {
       <div class="topbar-left">
         <div class="topbar-traffic-pad" aria-hidden="true" data-tauri-drag-region></div>
         <button
-          class="icon-btn sidebar-toggle"
+          class="icon-btn"
           :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
           :aria-expanded="!sidebarCollapsed"
           :aria-label="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
           aria-controls="sidebar"
           @click="toggleSidebar"
         >
-          <PanelLeftClose v-if="!sidebarCollapsed" :size="14" :stroke-width="1.5" />
-          <PanelLeftOpen v-else :size="14" :stroke-width="1.5" />
+          <Transition name="toggle-icon" mode="out-in">
+            <PanelLeftClose v-if="!sidebarCollapsed" key="close" :size="14" :stroke-width="1.5" />
+            <PanelLeftOpen v-else key="open" :size="14" :stroke-width="1.5" />
+          </Transition>
         </button>
-        <span class="brand" data-tauri-drag-region>Leaf</span>
       </div>
       <div class="topbar-right">
         <button
@@ -414,15 +415,11 @@ function onDragOver(e: DragEvent) {
   gap: 10px;
   font-size: 13px;
 }
-/* macOS 红黄绿按钮的结构性留白，按钮/品牌不再用 margin 避让 */
+/* macOS 红黄绿按钮的结构性留白（含左侧窗口内边距） */
 .topbar-traffic-pad {
-  width: 68px;
+  width: 60px;
   flex-shrink: 0;
   height: 100%;
-}
-.brand {
-  color: var(--text);
-  font-weight: 600;
 }
 .topbar-right {
   display: flex;
@@ -520,9 +517,14 @@ function onDragOver(e: DragEvent) {
   opacity: 0.45;
   cursor: not-allowed;
 }
-/* 侧边栏切换按钮专属：避让 macOS 红黄绿按钮 */
-.sidebar-toggle {
-  margin-left: 68px;
+/* 切换按钮图标淡入淡出（out-in：旧图标先淡出，再淡入新图标） */
+.toggle-icon-enter-active,
+.toggle-icon-leave-active {
+  transition: opacity 0.15s ease;
+}
+.toggle-icon-enter-from,
+.toggle-icon-leave-to {
+  opacity: 0;
 }
 .sidebar-head {
   display: flex;

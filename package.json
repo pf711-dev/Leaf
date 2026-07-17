@@ -25,7 +25,9 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "clean": "rm -rf dist src-tauri/target",
+    "clean:full": "rm -rf dist src-tauri/target node_modules"
   },
   "dependencies": {
     "@cloudworxx/tauri-plugin-mac-rounded-corners": "^1.1.1",
