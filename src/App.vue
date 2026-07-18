@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useDocumentsStore } from "./stores/documents";
 import { getDocumentPath, readDocumentContent } from "./api/client";
 import { extractToc, preparePreviewHtml, type TocItem } from "./utils/html";
@@ -32,6 +33,10 @@ const hasDocuments = computed(() => store.documents.length > 0);
 
 // 侧边栏展开/收起（默认展开，不持久化）
 const sidebarCollapsed = ref(false);
+
+// 窗口最大化/全屏状态：为 true 时收起红黄绿避让留白，让切换按钮左移与文档标题对齐
+const windowMaximized = ref(false);
+const appWindow = getCurrentWindow();
 
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value;
@@ -85,16 +90,43 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
+/** 更新窗口最大化状态（最大化或全屏任一为真即视为占满屏幕） */
+async function refreshMaximized() {
+  try {
+    const [maximized, fullscreen] = await Promise.all([
+      appWindow.isMaximized(),
+      appWindow.isFullscreen(),
+    ]);
+    windowMaximized.value = maximized || fullscreen;
+  } catch {
+    // 在非 Tauri 环境（如纯浏览器开发）下忽略
+  }
+}
+
+/** 窗口尺寸/状态变化时刷新最大化标记 */
+function onWindowChanged() {
+  refreshMaximized();
+}
+
 onMounted(() => {
   window.addEventListener("message", onIframeMessage);
   window.addEventListener("keydown", onKeydown);
   store.refresh();
   enableModernWindowStyle();
+  refreshMaximized();
+  const unlistenPromise = appWindow.onResized(onWindowChanged);
+  onUnmountedCleanup.push(() => {
+    unlistenPromise.then((unlisten) => unlisten());
+  });
 });
+
+// 收集需要在卸载时清理的副作用（如 Tauri 事件 unlisten）
+const onUnmountedCleanup: Array<() => void> = [];
 
 onUnmounted(() => {
   window.removeEventListener("message", onIframeMessage);
   window.removeEventListener("keydown", onKeydown);
+  onUnmountedCleanup.forEach((fn) => fn());
 });
 
 /** 接收 iframe 内脚本回报的当前章节高亮 / Esc 按键 */
@@ -252,7 +284,12 @@ function onDragOver(e: DragEvent) {
 </script>
 
 <template>
-  <div class="app" :class="{ presenting: presenting }" @drop="onDrop" @dragover="onDragOver">
+  <div
+    class="app"
+    :class="{ presenting: presenting, maximized: windowMaximized }"
+    @drop="onDrop"
+    @dragover="onDragOver"
+  >
     <!-- 顶部栏（data-tauri-drag-region 使整个顶栏可拖动窗口） -->
     <header class="topbar" data-tauri-drag-region>
       <div class="topbar-left">
@@ -409,6 +446,12 @@ function onDragOver(e: DragEvent) {
   background: var(--bg-sidebar);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  /* 最大化时左 padding 与侧边栏标题对齐：补偿 .topbar-left 的 gap(10px)，
+     使按钮最终左边距 = padding + gap = 14px，与文档标题一致 */
+  transition: padding 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.app.maximized .topbar {
+  padding-left: 0px;
 }
 .topbar-left {
   display: flex;
@@ -416,11 +459,20 @@ function onDragOver(e: DragEvent) {
   gap: 10px;
   font-size: 13px;
 }
-/* macOS 红黄绿按钮的结构性留白（含左侧窗口内边距） */
+/* macOS 红黄绿按钮的结构性留白（含左侧窗口内边距）。
+   最大化/全屏时红黄绿不再需要避让，留白收缩为 0，切换按钮随之左移与文档标题对齐。 */
 .topbar-traffic-pad {
   width: 60px;
   flex-shrink: 0;
   height: 100%;
+  transition: width 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.app.maximized .topbar-traffic-pad {
+  width: 0;
+}
+/* 最大化时按钮再往左微调 1px，与文档标题精确对齐 */
+.app.maximized .topbar-left .icon-btn {
+  margin-left: -1px;
 }
 .topbar-right {
   display: flex;
