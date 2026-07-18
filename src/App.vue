@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useDocumentsStore } from "./stores/documents";
-import { getDocumentPath, readDocumentContent } from "./api/client";
+import { getDocumentPath, readDocumentContent, writeDocumentContent } from "./api/client";
 import { extractToc, preparePreviewHtml, type TocItem } from "./utils/html";
 import DocumentListItem from "./components/DocumentListItem.vue";
 import TocPanel from "./components/TocPanel.vue";
@@ -12,7 +12,7 @@ import ConfirmDialog from "./components/ConfirmDialog.vue";
 import ConflictDialog from "./components/ConflictDialog.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import { enableModernWindowStyle } from "@cloudworxx/tauri-plugin-mac-rounded-corners";
-import { PanelLeftOpen, PanelLeftClose } from "@lucide/vue";
+import { PanelLeftOpen, PanelLeftClose, Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, RotateCcw, ChevronDown, Baseline, AArrowUp, AArrowDown } from "@lucide/vue";
 import type { ConflictInfo, Document } from "./types/document";
 
 const store = useDocumentsStore();
@@ -48,7 +48,47 @@ const sidebarWasCollapsed = ref(false);
 const presentHintVisible = ref(false);
 let presentHintTimer: ReturnType<typeof setTimeout> | null = null;
 
+// 编辑模式：整页可写 + 顶部工具栏。与演示模式互斥。
+const editing = ref(false);
+const saving = ref(false);
+
+// 工具栏下拉面板状态：'color' | null
+const openDropdown = ref<"color" | null>(null);
+// 预设文字颜色（飞书风格，8 色 1 行）
+const textColors = [
+  { value: "#212121", label: "黑色" },
+  { value: "#757575", label: "灰色" },
+  { value: "#E03440", label: "红色" },
+  { value: "#FF7A45", label: "橙色" },
+  { value: "#FFC400", label: "黄色" },
+  { value: "#00B42A", label: "绿色" },
+  { value: "#006AFA", label: "蓝色" },
+  { value: "#722ED1", label: "紫色" },
+];
+// 预设背景色（飞书风格，16 色 2 行 × 8 列；第一项为无填充）
+const bgColors = [
+  // 第一行：浅色
+  { value: "transparent", label: "无填充" },
+  { value: "#F2F2F2", label: "浅灰" },
+  { value: "#FFECE8", label: "浅红" },
+  { value: "#FFF3E8", label: "浅橙" },
+  { value: "#FFF7E8", label: "浅黄" },
+  { value: "#E8FFEA", label: "浅绿" },
+  { value: "#E8F3FF", label: "浅蓝" },
+  { value: "#F5E8FF", label: "浅紫" },
+  // 第二行：中色
+  { value: "#E5E5E5", label: "中灰" },
+  { value: "#BFBFBF", label: "深灰" },
+  { value: "#FFCCC7", label: "红" },
+  { value: "#FFD591", label: "橙" },
+  { value: "#FFFB8F", label: "黄" },
+  { value: "#B7EB8F", label: "绿" },
+  { value: "#ADC6FF", label: "蓝" },
+  { value: "#D3ADF7", label: "紫" },
+];
+
 function enterPresent() {
+  if (editing.value) exitEdit();   // 与编辑模式互斥
   sidebarWasCollapsed.value = sidebarCollapsed.value;
   sidebarCollapsed.value = true;
   presenting.value = true;
@@ -60,6 +100,58 @@ function exitPresent() {
   presenting.value = false;
   sidebarCollapsed.value = sidebarWasCollapsed.value;
   hidePresentHint();
+}
+
+// ---------- 编辑模式 ----------
+// 工具栏 → iframe 桥接：所有格式化都通过 postMessage 让 iframe 内执行 execCommand。
+
+/** 进入编辑模式：先退出演示（互斥），再通知 iframe 开 designMode */
+function enterEdit() {
+  if (presenting.value) exitPresent();
+  editing.value = true;
+  postToIframe({ type: "edit-mode", enabled: true });
+}
+
+/** 退出编辑模式（不保存）：关 designMode */
+function exitEdit() {
+  postToIframe({ type: "edit-mode", enabled: false });
+  editing.value = false;
+  openDropdown.value = null;
+}
+
+/** 取消编辑：放弃改动，重新加载原始内容 */
+function cancelEdit() {
+  exitEdit();
+  if (currentDoc.value) reloadCurrentDoc();
+}
+
+/** 执行一条格式化命令（bold/italic/fontSize/foreColor/...） */
+function runFormat(command: string, value?: string) {
+  postToIframe({ type: "exec", command, value });
+}
+
+/** 切换下拉面板（同一点击关闭，不同则切换） */
+function toggleDropdown() {
+  openDropdown.value = openDropdown.value === "color" ? null : "color";
+}
+
+/** 恢复默认颜色：文字回黑色、背景清除 */
+function resetColor() {
+  postToIframe({ type: "exec", command: "foreColor", value: "#212121" });
+  postToIframe({ type: "exec", command: "hiliteColor", value: "transparent" });
+  openDropdown.value = null;
+}
+
+/** 保存：向 iframe 请求当前 HTML，回执在 onIframeMessage 里处理 */
+async function saveEdit() {
+  if (!currentDoc.value || saving.value) return;
+  saving.value = true;
+  postToIframe({ type: "get-html" });
+}
+
+/** 向 iframe 发消息（iframe 未就绪时静默忽略） */
+function postToIframe(msg: object) {
+  iframeRef.value?.contentWindow?.postMessage(msg, "*");
 }
 
 function showPresentHint() {
@@ -111,6 +203,7 @@ function onWindowChanged() {
 onMounted(() => {
   window.addEventListener("message", onIframeMessage);
   window.addEventListener("keydown", onKeydown);
+  window.addEventListener("mousedown", onGlobalMouseDown);
   store.refresh();
   enableModernWindowStyle();
   refreshMaximized();
@@ -126,16 +219,50 @@ const onUnmountedCleanup: Array<() => void> = [];
 onUnmounted(() => {
   window.removeEventListener("message", onIframeMessage);
   window.removeEventListener("keydown", onKeydown);
+  window.removeEventListener("mousedown", onGlobalMouseDown);
   onUnmountedCleanup.forEach((fn) => fn());
 });
 
-/** 接收 iframe 内脚本回报的当前章节高亮 / Esc 按键 */
+/** 点击工具栏外部时关闭下拉面板 */
+function onGlobalMouseDown(e: MouseEvent) {
+  if (!openDropdown.value) return;
+  const target = e.target as HTMLElement;
+  if (!target.closest(".fmt-dropdown")) {
+    openDropdown.value = null;
+  }
+}
+
+/** 接收 iframe 内脚本回报：章节高亮 / Esc / 编辑保存的 HTML 回执 */
 function onIframeMessage(e: MessageEvent) {
-  if (e.data?.type === "toc-active") {
-    activeTocId.value = e.data.id || "";
-  } else if (e.data?.type === "esc" && presenting.value) {
+  const d = e.data;
+  if (!d) return;
+  if (d.type === "toc-active") {
+    activeTocId.value = d.id || "";
+  } else if (d.type === "esc") {
     // iframe 获得焦点时 Esc 无法冒泡到父窗口，由注入脚本转发过来
-    exitPresent();
+    if (editing.value) exitEdit();
+    else if (presenting.value) exitPresent();
+  } else if (d.type === "html-content" && saving.value) {
+    // 保存回执：写回库文件
+    onHtmlContentForSave(d.html);
+  }
+}
+
+/** 处理 iframe 返回的编辑后 HTML：写库 → 刷新预览 → 退出编辑 */
+async function onHtmlContentForSave(html: string) {
+  const doc = currentDoc.value;
+  if (!doc) {
+    saving.value = false;
+    return;
+  }
+  try {
+    await writeDocumentContent(doc.libraryPath, html);
+    exitEdit();
+    await reloadCurrentDoc();
+  } catch (err) {
+    console.error("保存失败:", err);
+  } finally {
+    saving.value = false;
   }
 }
 
@@ -202,7 +329,16 @@ async function copyPath(doc: Document) {
 
 async function selectDoc(doc: Document) {
   if (currentDoc.value?.id === doc.id) return;
+  // 切换文档前若在编辑，先退出编辑（不自动保存）
+  if (editing.value) exitEdit();
   currentDoc.value = doc;
+  await reloadCurrentDoc();
+}
+
+/** 重新加载当前文档内容到预览（首次选中、取消编辑、保存后都用） */
+async function reloadCurrentDoc() {
+  const doc = currentDoc.value;
+  if (!doc) return;
   loadingContent.value = true;
   currentHtml.value = "";
   activeTocId.value = "";
@@ -309,16 +445,88 @@ function onDragOver(e: DragEvent) {
         </button>
       </div>
       <div class="topbar-right">
-        <button
-          class="btn"
-          :disabled="!currentDoc"
-          @click="enterPresent"
-        >
-          演示
-        </button>
-        <button class="btn btn-primary" @click="pickAndImport" :disabled="store.importing > 0">
-          {{ store.importing > 0 ? "导入中…" : "导入" }}
-        </button>
+        <!-- 编辑模式：常驻工具栏（格式化按钮 + 保存/取消） -->
+        <template v-if="editing">
+          <div class="edit-toolbar" @mousedown.prevent>
+            <!-- 1. 字号：增大 / 减小 -->
+            <button class="fmt-btn" title="增大字号" @click="runFormat('increaseFontSize')"><AArrowUp :size="16" :stroke-width="1.8" /></button>
+            <button class="fmt-btn" title="减小字号" @click="runFormat('decreaseFontSize')"><AArrowDown :size="16" :stroke-width="1.8" /></button>
+
+            <!-- 2. 加粗 -->
+            <button class="fmt-btn" title="加粗" @click="runFormat('bold')"><Bold :size="15" :stroke-width="1.8" /></button>
+            <!-- 3. 删除线 -->
+            <button class="fmt-btn" title="删除线" @click="runFormat('strikeThrough')"><Strikethrough :size="15" :stroke-width="1.8" /></button>
+            <!-- 4. 倾斜 -->
+            <button class="fmt-btn" title="倾斜" @click="runFormat('italic')"><Italic :size="15" :stroke-width="1.8" /></button>
+            <!-- 5. 下划线 -->
+            <button class="fmt-btn" title="下划线" @click="runFormat('underline')"><Underline :size="15" :stroke-width="1.8" /></button>
+
+            <span class="fmt-sep"></span>
+
+            <!-- 6. 颜色样式：飞书风预设色板（文字色 + 背景色） -->
+            <div class="fmt-dropdown">
+              <button class="fmt-trigger" title="颜色" @click="toggleDropdown()">
+                <Baseline :size="15" :stroke-width="1.8" />
+                <ChevronDown :size="12" :stroke-width="1.8" />
+              </button>
+              <div v-if="openDropdown === 'color'" class="fmt-menu fmt-color-menu">
+                <div class="fmt-color-section">字体颜色</div>
+                <div class="fmt-color-grid">
+                  <button v-for="c in textColors" :key="'t'+c.value"
+                    class="fmt-color-swatch fmt-text-swatch" :style="{ color: c.value }"
+                    :title="c.label" @click="runFormat('foreColor', c.value)"
+                  >A</button>
+                </div>
+                <div class="fmt-color-section">背景颜色</div>
+                <div class="fmt-color-grid">
+                  <button v-for="c in bgColors" :key="'b'+c.value"
+                    class="fmt-color-swatch fmt-bg-swatch"
+                    :class="{ 'is-none': c.value === 'transparent' }"
+                    :style="{ background: c.value === 'transparent' ? undefined : c.value }"
+                    :title="c.label" @click="runFormat('hiliteColor', c.value)"
+                  >
+                    <svg v-if="c.value === 'transparent'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
+                    <span v-else>A</span>
+                  </button>
+                </div>
+                <div class="fmt-color-footer">
+                  <button class="fmt-reset-btn" @click="resetColor">恢复默认</button>
+                </div>
+              </div>
+            </div>
+
+            <span class="fmt-sep"></span>
+
+            <!-- 7. 对齐 -->
+            <button class="fmt-btn" title="左对齐" @click="runFormat('justifyLeft')"><AlignLeft :size="15" :stroke-width="1.8" /></button>
+            <button class="fmt-btn" title="居中" @click="runFormat('justifyCenter')"><AlignCenter :size="15" :stroke-width="1.8" /></button>
+            <button class="fmt-btn" title="右对齐" @click="runFormat('justifyRight')"><AlignRight :size="15" :stroke-width="1.8" /></button>
+
+            <span class="fmt-sep"></span>
+
+            <!-- 8-10. 撤销 / 重做 / 重置 -->
+            <button class="fmt-btn" title="撤销" @click="runFormat('undo')"><Undo2 :size="15" :stroke-width="1.8" /></button>
+            <button class="fmt-btn" title="重做" @click="runFormat('redo')"><Redo2 :size="15" :stroke-width="1.8" /></button>
+            <button class="fmt-btn" title="清空格式" @click="runFormat('removeFormat')"><RotateCcw :size="15" :stroke-width="1.8" /></button>
+          </div>
+          <button class="btn" :disabled="saving" @click="cancelEdit">取消</button>
+          <button class="btn btn-primary" :disabled="saving" @click="saveEdit">
+            {{ saving ? "保存中…" : "保存" }}
+          </button>
+        </template>
+
+        <!-- 非编辑模式：演示 / 编辑 / 导入 -->
+        <template v-else>
+          <button class="btn" :disabled="!currentDoc || loadingContent" @click="enterEdit">
+            编辑
+          </button>
+          <button class="btn" :disabled="!currentDoc" @click="enterPresent">
+            演示
+          </button>
+          <button class="btn btn-primary" @click="pickAndImport" :disabled="store.importing > 0">
+            {{ store.importing > 0 ? "导入中…" : "导入" }}
+          </button>
+        </template>
       </div>
     </header>
 
@@ -372,6 +580,7 @@ function onDragOver(e: DragEvent) {
               <iframe
                 ref="iframeRef"
                 class="preview-iframe"
+                :class="{ editing }"
                 :srcdoc="currentHtml"
                 sandbox="allow-scripts"
               />
@@ -518,6 +727,172 @@ function onDragOver(e: DragEvent) {
 .btn-danger:hover {
   color: var(--danger);
   background: var(--bg-hover);
+}
+
+/* ---------- 编辑工具栏 ---------- */
+.edit-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.fmt-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.fmt-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.fmt-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--border);
+}
+/* 下拉触发按钮（字号、颜色） */
+.fmt-dropdown {
+  position: relative;
+}
+.fmt-trigger {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 26px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.fmt-trigger:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+/* 下拉菜单浮层 */
+.fmt-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 92px;
+  padding: 4px;
+  background: var(--bg);
+  border-radius: 8px;
+  box-shadow: rgba(15, 15, 15, 0.05) 0 0 0 1px,
+    rgba(15, 15, 15, 0.1) 0 3px 6px, rgba(15, 15, 15, 0.2) 0 9px 24px;
+}
+.fmt-menu-item {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.fmt-menu-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.fmt-menu-item.active {
+  color: var(--accent-blue);
+  font-weight: 500;
+}
+/* 颜色面板 */
+.fmt-color-menu {
+  min-width: 240px;
+}
+.fmt-color-section {
+  padding: 8px 6px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.fmt-color-section:first-child {
+  padding-top: 4px;
+}
+.fmt-color-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 3px;
+  padding: 0 6px;
+}
+/* 文字色块：只显示带颜色的 A */
+.fmt-text-swatch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.1s, transform 0.1s;
+}
+.fmt-text-swatch:hover {
+  background: var(--bg-hover);
+  transform: scale(1.1);
+}
+/* 背景色块：填充背景 + A */
+.fmt-bg-swatch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 700;
+  color: #555;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.fmt-bg-swatch:hover {
+  transform: scale(1.1);
+}
+.fmt-bg-swatch.is-none {
+  color: var(--text-faint);
+  background: var(--bg);
+}
+/* 面板底部恢复默认 */
+.fmt-color-footer {
+  padding: 8px 6px 6px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.fmt-reset-btn {
+  width: 100%;
+  padding: 5px 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.fmt-reset-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 /* ---------- 主内容分栏 ---------- */
@@ -673,6 +1048,11 @@ function onDragOver(e: DragEvent) {
   width: 100%;
   height: 100%;
   border: none;
+  transition: box-shadow 0.2s ease;
+}
+/* 编辑模式：iframe 外框蓝色细线，提示当前可编辑 */
+.preview-iframe.editing {
+  box-shadow: inset 0 0 0 2px var(--accent-blue);
 }
 
 /* 预览空状态 */

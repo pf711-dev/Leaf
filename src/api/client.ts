@@ -32,6 +32,11 @@ export function readDocumentContent(libraryPath: string): Promise<string> {
   return invoke<string>("read_document_content", { libraryPath });
 }
 
+/** 写回某个文档的 HTML 原文（编辑模式保存用）。 */
+export function writeDocumentContent(libraryPath: string, content: string): Promise<void> {
+  return invoke<void>("write_document_content", { libraryPath, content });
+}
+
 /** 删除一个文档（库文件 + 数据库记录）。 */
 export function deleteDocument(id: string, libraryPath: string): Promise<void> {
   return invoke<void>("delete_document", { id, libraryPath });

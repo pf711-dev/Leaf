@@ -103,6 +103,13 @@ pub fn read_library_file(library_path: &str) -> std::io::Result<String> {
     fs::read_to_string(full)
 }
 
+/// 写回库内某个文档文件的全部内容（编辑保存用），文件不存在则创建。
+pub fn write_library_file(library_path: &str, content: &str) -> std::io::Result<()> {
+    let dir = ensure_library_dir()?;
+    let full = dir.join(library_path);
+    fs::write(full, content)
+}
+
 /// 删除库内的文档文件。文件不存在视为成功。
 pub fn delete_library_file(library_path: &str) -> std::io::Result<()> {
     let dir = ensure_library_dir()?;

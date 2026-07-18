@@ -39,6 +39,7 @@ pub fn run() {
             commands::get_document_path,
             commands::list_documents,
             commands::read_document_content,
+            commands::write_document_content,
             commands::delete_document,
             commands::get_library_dir,
             plugins::mac_rounded_corners::enable_rounded_corners,

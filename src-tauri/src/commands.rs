@@ -103,6 +103,12 @@ pub fn read_document_content(library_path: String) -> Result<String, String> {
     library::read_library_file(&library_path).map_err(|e| e.to_string())
 }
 
+/// 前端调用：写回某个文档的 HTML 原文（编辑模式保存用）。
+#[tauri::command]
+pub fn write_document_content(library_path: String, content: String) -> Result<(), String> {
+    library::write_library_file(&library_path, &content).map_err(|e| e.to_string())
+}
+
 /// 前端调用：删除一个文档（库文件 + 数据库记录）。
 #[tauri::command]
 pub fn delete_document(

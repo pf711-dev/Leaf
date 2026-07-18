@@ -55,9 +55,27 @@ html{min-width:1024px;}
 (function(){
   var ids=${anchorIds};
   window.addEventListener("message",function(e){
-    if(e.data&&e.data.type==="scroll-to"){
-      var el=document.getElementById(e.data.id);
+    var d=e.data;
+    if(!d)return;
+    if(d.type==="scroll-to"){
+      var el=document.getElementById(d.id);
       if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
+    }else if(d.type==="edit-mode"){
+      // 开关整个文档的可编辑状态
+      document.designMode=d.enabled?"on":"off";
+    }else if(d.type==="exec"){
+      // 执行格式化命令（bold/italic/fontSize/...）
+      try{document.execCommand(d.command,false,d.value||null);}catch(err){}
+    }else if(d.type==="get-html"){
+      // 保存：先移除预览专用的注入节点，再序列化 outerHTML 回传父窗口
+      var fix=document.getElementById("_preview_fix");
+      var nav=document.getElementById("_preview_nav");
+      if(fix)fix.remove();
+      if(nav)nav.remove();
+      var html=document.documentElement.outerHTML;
+      // doctype 可能丢失，尽量补回
+      var dt=document.doctype?"<!DOCTYPE "+(document.doctype.name||"html")+">":"";
+      parent.postMessage({type:"html-content",html:dt+html},"*");
     }
   });
   function report(){
