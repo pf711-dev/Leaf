@@ -54,6 +54,39 @@ html{min-width:1024px;}
 <script id="_preview_nav">
 (function(){
   var ids=${anchorIds};
+  // 自实现字号增减：直接用 span[style=font-size:Npx] 包裹选区，
+  // 避免 execCommand("fontSize") 产生的 <font size> 与现代 CSS 混存的档位错乱、
+  // 整行影响、选区丢失等问题。
+  var STEP=2;                       // 每次增减 2px
+  var MIN_PX=10,MAX_PX=72;
+  function bumpFontSize(dir){
+    var sel=window.getSelection();
+    if(!sel||sel.rangeCount===0||sel.isCollapsed)return;
+    var range=sel.getRangeAt(0);
+    // 取选区起始元素当前计算字号作为基准
+    var sc=range.startContainer;
+    var refEl=(sc.nodeType===1)?sc:sc.parentElement;
+    if(!refEl)return;
+    var curPx=parseFloat(getComputedStyle(refEl).fontSize)||16;
+    var nextPx=Math.max(MIN_PX,Math.min(MAX_PX,Math.round(curPx)+dir*STEP));
+    if(nextPx===Math.round(curPx))nextPx+=dir;  // 至少变化 1px
+    nextPx=Math.max(MIN_PX,Math.min(MAX_PX,nextPx));
+    // 用 span 包裹选区内容并设置字号；surroundContents 要求选区起讫在同一元素内，
+    // 跨节点时先 extract + reinsert 规整。
+    try{
+      var span=document.createElement("span");
+      span.style.fontSize=nextPx+"px";
+      if(range.startContainer===range.endContainer||range.toString().length>0){
+        span.appendChild(range.extractContents());
+        range.insertNode(span);
+        // 把选区恢复到新 span 内，方便连续点击
+        var nr=document.createRange();
+        nr.selectNodeContents(span);
+        sel.removeAllRanges();
+        sel.addRange(nr);
+      }
+    }catch(err){}
+  }
   window.addEventListener("message",function(e){
     var d=e.data;
     if(!d)return;
@@ -65,7 +98,13 @@ html{min-width:1024px;}
       document.designMode=d.enabled?"on":"off";
     }else if(d.type==="exec"){
       // 执行格式化命令（bold/italic/fontSize/...）
-      try{document.execCommand(d.command,false,d.value||null);}catch(err){}
+      try{
+        if(d.command==="increaseFontSize"||d.command==="decreaseFontSize"){
+          bumpFontSize(d.command==="increaseFontSize"?1:-1);
+        }else{
+          document.execCommand(d.command,false,d.value||null);
+        }
+      }catch(err){}
     }else if(d.type==="get-html"){
       // 保存：先移除预览专用的注入节点，再序列化 outerHTML 回传父窗口
       var fix=document.getElementById("_preview_fix");
