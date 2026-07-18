@@ -85,12 +85,14 @@ impl Database {
         Ok(())
     }
 
-    /// 返回所有文档的库内相对路径（library_path），用于生成可读文件名时的冲突检测。
-    pub fn list_library_paths(&self) -> rusqlite::Result<Vec<String>> {
+    /// 更新某条文档的 library_path（文件名迁移用）。
+    pub fn update_library_path(&self, id: &str, new_path: &str) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT library_path FROM documents")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        rows.collect()
+        conn.execute(
+            "UPDATE documents SET library_path = ?1 WHERE id = ?2",
+            params![new_path, id],
+        )?;
+        Ok(())
     }
 
     /// 按原始文件名（file_name）查找文档，用于导入去重预检。

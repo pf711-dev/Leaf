@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useDocumentsStore } from "./stores/documents";
 import { getDocumentPath, readDocumentContent } from "./api/client";
 import { extractToc, preparePreviewHtml, type TocItem } from "./utils/html";
@@ -161,7 +162,7 @@ function onConflictCancel() {
 async function copyPath(doc: Document) {
   try {
     const path = await getDocumentPath(doc.libraryPath);
-    await navigator.clipboard.writeText(path);
+    await writeText(path);
   } catch (e) {
     console.error("复制路径失败:", e);
   }

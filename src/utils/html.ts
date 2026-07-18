@@ -43,6 +43,13 @@ html,body{margin:0;padding:0;}
 html{min-width:1024px;}
 .toc{display:none !important;}
 .layout{grid-template-columns:1fr !important;}
+/* 滚动条：恢复 macOS 原生 Overlay 行为（默认不显示，滚动时浮现、不占宽度）。
+   清除被导入文档可能自定义的 ::-webkit-scrollbar 样式，横向纵向一致。 */
+*{scrollbar-width:auto;}
+::-webkit-scrollbar{width:auto;height:auto;background:transparent;}
+::-webkit-scrollbar-thumb{background:initial;}
+::-webkit-scrollbar-track{background:initial;}
+::-webkit-scrollbar-corner{background:transparent;}
 </style>
 <script id="_preview_nav">
 (function(){

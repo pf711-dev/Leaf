@@ -22,7 +22,7 @@ const emit = defineEmits<{
           :style="{ left: x + 'px', top: y + 'px' }"
           @click.stop
         >
-          <button class="menu-item" @click="emit('copyPath')">复制路径</button>
+          <button class="menu-item" @click="emit('copyPath')">复制文件路径</button>
           <button class="menu-item menu-item-danger" @click="emit('delete')">删除</button>
         </div>
       </transition>

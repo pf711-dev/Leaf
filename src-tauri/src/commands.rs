@@ -172,9 +172,9 @@ fn import_single(
             .unwrap_or_default()
     });
 
-    // 生成可读的库内文件名（基于标题，处理冲突）
-    let existing_paths = db.list_library_paths()?;
-    let dest_name = library::build_library_filename(&title, &existing_paths);
+    // 库内文件名直接用原始文件名（file_name）。
+    // 同名文件已被上方的 find_by_filename 去重拦截，库内不会出现重名，无需额外冲突处理。
+    let dest_name = file_name.clone();
     let (_, size) = library::import_file_named(&source, &dest_name)?;
 
     let now = chrono::Utc::now().timestamp_millis();

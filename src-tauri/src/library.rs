@@ -41,48 +41,59 @@ pub fn import_file_named(source: &Path, dest_name: &str) -> std::io::Result<(Str
     Ok((dest_name.to_string(), size))
 }
 
-/// 基于文档标题生成合法的库内文件名，冲突时自动加后缀。
+/// 迁移历史库内文件名到原始文件名。
 ///
-/// 规则：清理非法字符 → 限制长度 → 与 existing 比对 → 冲突加 "-2"/"-3" 后缀。
-/// title 为空时 fallback 到 "未命名"。
-pub fn build_library_filename(title: &str, existing: &[String]) -> String {
-    let cleaned = sanitize_filename(title);
-    let base = if cleaned.is_empty() {
-        "未命名".to_string()
-    } else {
-        cleaned
+/// 早期版本库内文件名基于 HTML <title> 生成，与原始文件名不一致。
+/// 此函数遍历 docs，把 library_path != file_name 的库内文件重命名为原始文件名，
+/// 并回调 on_update 更新 DB。
+///
+/// - docs：所有文档（调用方负责从 DB 读取）
+/// - on_update：更新某条文档的 library_path（参数：doc_id, new_path）
+///
+/// 幂等：迁移完成后所有文档均满足 library_path == file_name。
+pub fn migrate_filenames<F>(docs: &[crate::db::Document], on_update: F)
+where
+    F: Fn(&str, &str) -> Result<(), String>,
+{
+    let dir = match ensure_library_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("迁移：无法定位库目录: {}", e);
+            return;
+        }
     };
 
-    // 无冲突直接用 base.html
-    let candidate = format!("{}.html", base);
-    if !existing.iter().any(|e| e == &candidate) {
-        return candidate;
-    }
+    for doc in docs {
+        if doc.library_path == doc.file_name {
+            continue; // 已是原始名，跳过
+        }
+        let src = dir.join(&doc.library_path);
+        let dst = dir.join(&doc.file_name);
 
-    // 冲突：尝试 base-2.html, base-3.html ...
-    for n in 2..u32::MAX {
-        let candidate = format!("{}-{}.html", base, n);
-        if !existing.iter().any(|e| e == &candidate) {
-            return candidate;
+        // 防御：目标名在库目录已存在（且不是自身），跳过避免覆盖
+        if dst.exists() && src != dst {
+            eprintln!(
+                "迁移：跳过 {}（目标名 {} 已存在）",
+                doc.library_path, doc.file_name
+            );
+            continue;
+        }
+
+        // 源文件存在则重命名；不存在（文件已丢失）只更新 DB
+        if src.exists() {
+            if let Err(e) = std::fs::rename(&src, &dst) {
+                eprintln!(
+                    "迁移：重命名失败 {} → {}: {}",
+                    doc.library_path, doc.file_name, e
+                );
+                continue;
+            }
+        }
+        // 更新 DB
+        if let Err(e) = on_update(&doc.id, &doc.file_name) {
+            eprintln!("迁移：更新 DB 失败 {}: {}", doc.id, e);
         }
     }
-    // 理论上跑不到这里
-    format!("{}-{}.html", base, uuid::Uuid::new_v4())
-}
-
-/// 清理标题中的文件系统非法字符，限制长度，去除首尾空格和点。
-fn sanitize_filename(title: &str) -> String {
-    const INVALID_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
-    let cleaned: String = title
-        .trim()
-        .chars()
-        .map(|c| if INVALID_CHARS.contains(&c) { '_' } else { c })
-        .collect::<String>()
-        .trim_matches(|c: char| c == '.' || c.is_whitespace())
-        .chars()
-        .take(80)
-        .collect();
-    cleaned
 }
 
 /// 读取库内某个文档文件的全部内容（阅读器渲染用）。

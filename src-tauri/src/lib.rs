@@ -16,10 +16,20 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             // 初始化数据库，作为托管状态注入到所有命令中。
             let db_path = library::db_path().expect("无法定位数据库路径");
             let db = Database::open(&db_path).expect("无法打开数据库");
+
+            // 一次性迁移：把历史基于 <title> 的库内文件名改回原始文件名。
+            // 幂等，迁移完成后所有文档 library_path == file_name，再跑也无副作用。
+            if let Ok(docs) = db.list() {
+                library::migrate_filenames(&docs, |id, new_path| {
+                    db.update_library_path(id, new_path).map_err(|e| e.to_string())
+                });
+            }
+
             app.manage(db);
             Ok(())
         })
