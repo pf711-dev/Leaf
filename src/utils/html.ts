@@ -54,38 +54,48 @@ html{min-width:1024px;}
 <script id="_preview_nav">
 (function(){
   var ids=${anchorIds};
-  // 自实现字号增减：直接用 span[style=font-size:Npx] 包裹选区，
-  // 避免 execCommand("fontSize") 产生的 <font size> 与现代 CSS 混存的档位错乱、
-  // 整行影响、选区丢失等问题。
+  // 自实现字号增减。走 execCommand("insertHTML") 通道而非 Range 的 extractContents/
+  // insertNode —— 后者在 sandbox=allow-scripts（无 allow-same-origin）的 release
+  // WKWebView 下会被拦截，导致字号只影响行高不生效。insertHTML 是 execCommand
+  // 编辑通道，sandbox 允许。同时用 span + !important 覆盖文档原有高优先级 CSS。
   var STEP=2;                       // 每次增减 2px
   var MIN_PX=10,MAX_PX=72;
   function bumpFontSize(dir){
     var sel=window.getSelection();
     if(!sel||sel.rangeCount===0||sel.isCollapsed)return;
     var range=sel.getRangeAt(0);
-    // 取选区起始元素当前计算字号作为基准
     var sc=range.startContainer;
     var refEl=(sc.nodeType===1)?sc:sc.parentElement;
     if(!refEl)return;
     var curPx=parseFloat(getComputedStyle(refEl).fontSize)||16;
     var nextPx=Math.max(MIN_PX,Math.min(MAX_PX,Math.round(curPx)+dir*STEP));
-    if(nextPx===Math.round(curPx))nextPx+=dir;  // 至少变化 1px
+    if(nextPx===Math.round(curPx))nextPx+=dir;
     nextPx=Math.max(MIN_PX,Math.min(MAX_PX,nextPx));
-    // 用 span 包裹选区内容并设置字号；surroundContents 要求选区起讫在同一元素内，
-    // 跨节点时先 extract + reinsert 规整。
+    // 取选区内容的 HTML，包进带样式的 span，用 insertHTML 替换选区。
+    // span 上加唯一标记，插入后用 querySelector 定位它并把选区恢复到其内部，
+    // 这样支持连续点击增减。
+    var frag=range.cloneContents();
+    var tmp=document.createElement("div");
+    tmp.appendChild(frag);
+    var inner=tmp.innerHTML;
+    var mark="_leaf_fs_"+Date.now()+"_"+Math.random().toString(36).slice(2,7);
+    var html='<span data-leaf-fs="'+mark+'" style="font-size:'+nextPx+'px !important;line-height:1.4 !important;">'+inner+'</span>';
     try{
-      var span=document.createElement("span");
-      span.style.fontSize=nextPx+"px";
-      if(range.startContainer===range.endContainer||range.toString().length>0){
-        span.appendChild(range.extractContents());
-        range.insertNode(span);
-        // 把选区恢复到新 span 内，方便连续点击
+      document.execCommand("insertHTML",false,html);
+      // 定位刚插入的 span，恢复选区到其内部，支持连续点击
+      var span=document.querySelector('[data-leaf-fs="'+mark+'"]');
+      if(span){
         var nr=document.createRange();
         nr.selectNodeContents(span);
-        sel.removeAllRanges();
-        sel.addRange(nr);
+        var ns=window.getSelection();
+        ns.removeAllRanges();
+        ns.addRange(nr);
+        // 标记用完清除，避免污染保存的 HTML
+        span.removeAttribute("data-leaf-fs");
       }
-    }catch(err){}
+    }catch(err){
+      try{parent.postMessage({type:"bump-error",msg:String(err&&err.message||err)},"*");}catch(e){}
+    }
   }
   window.addEventListener("message",function(e){
     var d=e.data;
