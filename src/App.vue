@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -7,12 +7,14 @@ import { useDocumentsStore } from "./stores/documents";
 import { getDocumentPath, readDocumentContent, writeDocumentContent } from "./api/client";
 import { extractToc, preparePreviewHtml, type TocItem } from "./utils/html";
 import DocumentListItem from "./components/DocumentListItem.vue";
+import FolderTree from "./components/FolderTree.vue";
 import TocPanel from "./components/TocPanel.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
 import ConflictDialog from "./components/ConflictDialog.vue";
-import ContextMenu from "./components/ContextMenu.vue";
+import ContextMenu, { type MenuItem } from "./components/ContextMenu.vue";
+import FolderPickerDialog from "./components/FolderPickerDialog.vue";
 import { enableModernWindowStyle } from "@cloudworxx/tauri-plugin-mac-rounded-corners";
-import { PanelLeftOpen, PanelLeftClose, Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, RotateCcw, ChevronDown, Baseline, AArrowUp, AArrowDown } from "@lucide/vue";
+import { PanelLeftOpen, PanelLeftClose, Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, RotateCcw, ChevronDown, Baseline, AArrowUp, AArrowDown, Plus, FileUp, FolderUp, FolderOpen } from "@lucide/vue";
 import type { ConflictInfo, Document } from "./types/document";
 
 const store = useDocumentsStore();
@@ -30,6 +32,11 @@ const activeTocId = ref("");
 const iframeRef = ref<HTMLIFrameElement | null>(null);
 
 const hasDocuments = computed(() => store.documents.length > 0);
+
+// 展开的文件夹 id 集合（不持久化，重启恢复默认展开一级文件夹）
+const expandedFolderIds = ref<Set<string>>(new Set());
+// 正在重命名的文件夹 id（null = 无）
+const renamingFolderId = ref<string | null>(null);
 
 // 侧边栏展开/收起（默认展开，不持久化）
 const sidebarCollapsed = ref(false);
@@ -170,6 +177,35 @@ function hidePresentHint() {
   }
 }
 
+// 文件夹操作错误 toast：watch store.folderError，有值时显示 3 秒后自动清空
+const folderErrorVisible = ref(false);
+let folderErrorTimer: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => store.folderError,
+  (msg) => {
+    if (!msg) return;
+    folderErrorVisible.value = true;
+    if (folderErrorTimer) clearTimeout(folderErrorTimer);
+    folderErrorTimer = setTimeout(() => {
+      folderErrorVisible.value = false;
+      store.folderError = "";
+    }, 3000);
+  },
+);
+
+// 信息 toast（成功 / 摘要类，蓝色调，与 error toast 视觉区分）
+const infoToastVisible = ref(false);
+const infoToastMsg = ref("");
+let infoToastTimer: ReturnType<typeof setTimeout> | null = null;
+function showInfoToast(msg: string) {
+  infoToastMsg.value = msg;
+  infoToastVisible.value = true;
+  if (infoToastTimer) clearTimeout(infoToastTimer);
+  infoToastTimer = setTimeout(() => {
+    infoToastVisible.value = false;
+  }, 3500);
+}
+
 /** Esc 退出演示 / Cmd+B 切换侧边栏 */
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "Escape" && presenting.value) {
@@ -225,10 +261,19 @@ onUnmounted(() => {
 
 /** 点击工具栏外部时关闭下拉面板 */
 function onGlobalMouseDown(e: MouseEvent) {
-  if (!openDropdown.value) return;
-  const target = e.target as HTMLElement;
-  if (!target.closest(".fmt-dropdown")) {
-    openDropdown.value = null;
+  // 关闭编辑模式颜色下拉
+  if (openDropdown.value) {
+    const target = e.target as HTMLElement;
+    if (!target.closest(".fmt-dropdown")) {
+      openDropdown.value = null;
+    }
+  }
+  // 关闭导入下拉
+  if (importDropdownOpen.value) {
+    const target = e.target as HTMLElement;
+    if (!target.closest(".import-dropdown")) {
+      importDropdownOpen.value = false;
+    }
   }
 }
 
@@ -271,6 +316,58 @@ const conflictVisible = ref(false);
 const conflictList = ref<ConflictInfo[]>([]);
 const pendingPaths = ref<string[]>([]);
 
+// 导入下拉菜单状态
+const importDropdownOpen = ref(false);
+
+/** 切换导入下拉 */
+function toggleImportDropdown() {
+  if (store.importing > 0) return;
+  importDropdownOpen.value = !importDropdownOpen.value;
+}
+
+/** 下拉项：导入 HTML 文件 */
+function onPickImportFiles() {
+  importDropdownOpen.value = false;
+  pickAndImport();
+}
+
+/** 下拉项：导入文件夹 */
+async function onPickImportFolder() {
+  importDropdownOpen.value = false;
+  await pickFolderAndImport();
+}
+
+/** 选择文件夹并导入（连目录结构一起） */
+async function pickFolderAndImport() {
+  const dir = await open({ directory: true, recursive: true });
+  if (!dir || typeof dir !== "string") return;
+  const result = await store.importDirectory(dir);
+  if (!result) return;
+  // 组装结果摘要 toast
+  showImportResultToast(result);
+}
+
+/** 根据导入结果摘要，组装 toast 文案（成功走 info toast，异常走 error toast） */
+function showImportResultToast(r: { importedCount: number; skippedCount: number; flattenedCount: number; folderCount: number; firstError: string; failedCount: number }) {
+  // 全部失败：用 error toast 显示首个失败原因，便于诊断
+  if (r.importedCount === 0 && r.failedCount > 0) {
+    store.folderError = `导入失败（${r.failedCount} 个文件）：${r.firstError}`;
+    return;
+  }
+  if (r.importedCount === 0 && r.skippedCount === 0) {
+    store.folderError = "没有导入任何文档";
+    return;
+  }
+  const parts: string[] = [`已导入 ${r.importedCount} 篇文档`];
+  if (r.folderCount > 0) parts.push(`新建 ${r.folderCount} 个文件夹`);
+  if (r.flattenedCount > 0) {
+    parts.push(`${r.flattenedCount} 篇因超过最大层级（3 级）已合并到上级`);
+  }
+  if (r.skippedCount > 0) parts.push(`${r.skippedCount} 篇同名已跳过`);
+  if (r.failedCount > 0) parts.push(`${r.failedCount} 篇导入失败`);
+  showInfoToast(parts.join("，"));
+}
+
 async function pickAndImport() {
   const selected = await open({
     multiple: true,
@@ -281,40 +378,57 @@ async function pickAndImport() {
   await tryImport(paths);
 }
 
-/** 预检冲突 → 无冲突直接导入，有冲突弹窗等用户选择 */
+/** 预检冲突 → 弹文件夹选择器选目标 → 有冲突再弹冲突弹窗 → 导入 */
 async function tryImport(paths: string[]) {
-  const conflicts = await store.checkConflicts(paths);
+  // 先弹文件夹选择器选目标（默认根目录）
+  pickerContext = "import";
+  folderPickerTitle.value = "导入到…";
+  pickerExcludeDocFolderId.value = null;
+  pendingPaths.value = paths;
+  folderPickerVisible.value = true;
+}
+
+/** 选好目标后：预检冲突 → 无冲突直接导入，有冲突弹窗等用户选择 */
+async function continueImportAfterPicker() {
+  const folderId = pendingImportFolderId.value;
+  pendingImportFolderId.value = null;
+  if (pendingPaths.value.length === 0) return;
+  const conflicts = await store.checkConflicts(pendingPaths.value);
   if (conflicts.length > 0) {
-    pendingPaths.value = paths;
+    // 记住目标文件夹，等冲突弹窗回调时用
+    pendingImportFolderId.value = folderId;
     conflictList.value = conflicts;
     conflictVisible.value = true;
   } else {
-    await store.importWithResolution(paths);
+    await store.importWithResolution(pendingPaths.value, undefined, folderId);
+    pendingPaths.value = [];
   }
 }
 
 /** 用户在冲突弹窗选「全部跳过」 */
 async function onConflictSkip() {
   conflictVisible.value = false;
+  const folderId = pendingImportFolderId.value;
+  pendingImportFolderId.value = null;
   // 跳过所有撞名文件，只导入非冲突项
-  await store.importWithResolution(pendingPaths.value, "skip");
+  await store.importWithResolution(pendingPaths.value, "skip", folderId);
   pendingPaths.value = [];
-  conflictList.value = [];
 }
 
 /** 用户在冲突弹窗选「全部覆盖」 */
 async function onConflictOverwrite() {
   conflictVisible.value = false;
-  await store.importWithResolution(pendingPaths.value, "overwrite");
+  const folderId = pendingImportFolderId.value;
+  pendingImportFolderId.value = null;
+  await store.importWithResolution(pendingPaths.value, "overwrite", folderId);
   pendingPaths.value = [];
-  conflictList.value = [];
 }
 
 /** 用户在冲突弹窗选「取消」 */
 function onConflictCancel() {
   conflictVisible.value = false;
   pendingPaths.value = [];
-  conflictList.value = [];
+  pendingImportFolderId.value = null;
 }
 
 /** 复制当前文档的库内绝对路径到剪贴板 */
@@ -378,34 +492,208 @@ async function doDelete() {
   pendingDelete.value = null;
 }
 
-// 右键菜单
+// ==================== 文件夹操作 ====================
+
+/** 新建文件夹对话框可见性 + 目标父文件夹（null = 根目录） */
+const newFolderVisible = ref(false);
+const newFolderParentId = ref<string | null>(null);
+const newFolderName = ref("");
+const newFolderInputEl = ref<HTMLInputElement | null>(null);
+
+/** 对话框打开时自动聚焦输入框 */
+watch(newFolderVisible, (v) => {
+  if (v) {
+    nextTick(() => {
+      newFolderInputEl.value?.focus();
+    });
+  }
+});
+
+/** 文件夹选择器（移动文档 / 导入目标）可见性 + 上下文 */
+const folderPickerVisible = ref(false);
+const folderPickerTitle = ref("选择文件夹");
+/** 'move'（移动文档）| 'import'（导入目标） */
+let pickerContext: "move" | "import" = "move";
+/** 移动文档模式下：待移动的文档 id（用于 excludeId 防止移到原文件夹） */
+const pickerExcludeDocFolderId = ref<string | null>(null);
+
+/** 删除文件夹确认 */
+const deleteFolderVisible = ref(false);
+const pendingDeleteFolder = ref<{ id: string; name: string } | null>(null);
+
+/** 右键菜单：区分文档 / 文件夹两种目标 */
 const contextMenuVisible = ref(false);
 const contextMenuX = ref(0);
 const contextMenuY = ref(0);
-const contextMenuDoc = ref<Document | null>(null);
+const contextMenuItems = ref<MenuItem[]>([]);
+let contextMenuTarget: { type: "doc"; doc: Document } | { type: "folder"; folderId: string } | null = null;
 
-/** 列表项右键 → 弹出菜单 */
+/** 在根目录新建文件夹（侧边栏头部「+」按钮） */
+function onNewFolderAtRoot() {
+  newFolderParentId.value = null;
+  newFolderName.value = "";
+  newFolderVisible.value = true;
+}
+
+/** 在指定父文件夹下新建子文件夹（右键菜单「新建子文件夹」） */
+function onNewSubfolder(parentId: string) {
+  newFolderParentId.value = parentId;
+  newFolderName.value = "";
+  newFolderVisible.value = true;
+}
+
+/** 确认新建文件夹 */
+async function confirmNewFolder() {
+  const name = newFolderName.value.trim();
+  if (!name) {
+    newFolderVisible.value = false;
+    return;
+  }
+  newFolderVisible.value = false;
+  const folder = await store.createFolder(name, newFolderParentId.value);
+  if (folder) {
+    // 新建的文件夹自动展开其父（如果有的话）+ 自身默认收起
+    if (folder.parentId) {
+      const next = new Set(expandedFolderIds.value);
+      next.add(folder.parentId);
+      expandedFolderIds.value = next;
+    }
+  }
+}
+
+/** 切换文件夹展开/收起 */
+function onToggleFolder(folderId: string) {
+  const next = new Set(expandedFolderIds.value);
+  if (next.has(folderId)) next.delete(folderId);
+  else next.add(folderId);
+  expandedFolderIds.value = next;
+}
+
+/** 进入重命名编辑态 */
+function onStartRename(folderId: string) {
+  renamingFolderId.value = folderId;
+}
+
+/** 提交重命名 */
+async function onCommitRename(folderId: string, newName: string) {
+  renamingFolderId.value = null;
+  await store.renameFolder(folderId, newName);
+}
+
+/** 取消重命名 */
+function onCancelRename() {
+  renamingFolderId.value = null;
+}
+
+/** 拖拽文档到文件夹 */
+async function onMoveDoc(docId: string, folderId: string) {
+  await store.moveDocument(docId, folderId);
+}
+
+/** 列表右键：根据目标类型组装菜单 */
 function onItemContextMenu(doc: Document, e: MouseEvent) {
   e.preventDefault();
-  contextMenuDoc.value = doc;
+  contextMenuTarget = { type: "doc", doc };
+  contextMenuItems.value = [
+    { key: "move", label: "移动到…" },
+    { key: "copyPath", label: "复制文件路径" },
+    { key: "delete", label: "删除", danger: true },
+  ];
   contextMenuX.value = e.clientX;
   contextMenuY.value = e.clientY;
   contextMenuVisible.value = true;
 }
 
-function onContextCopyPath() {
-  contextMenuVisible.value = false;
-  const doc = contextMenuDoc.value;
-  if (doc) copyPath(doc);
-  contextMenuDoc.value = null;
+/** 文件夹右键。第 3 级（最深层）不显示「新建子文件夹」，避免无意义地走到报错。 */
+function onFolderContextMenu(folderId: string, e: MouseEvent) {
+  e.preventDefault();
+  contextMenuTarget = { type: "folder", folderId };
+  const folder = store.folders.find((f) => f.id === folderId);
+  const isMaxLevel = (folder?.level ?? 0) >= 3;
+  const items: MenuItem[] = [{ key: "rename", label: "重命名" }];
+  if (!isMaxLevel) {
+    items.push({ key: "newSub", label: "新建子文件夹" });
+  }
+  items.push({ key: "delete", label: "删除", danger: true });
+  contextMenuItems.value = items;
+  contextMenuX.value = e.clientX;
+  contextMenuY.value = e.clientY;
+  contextMenuVisible.value = true;
 }
 
-function onContextDelete() {
+/** 右键菜单选中某项 */
+function onContextSelect(key: string) {
   contextMenuVisible.value = false;
-  const doc = contextMenuDoc.value;
-  if (doc) removeDoc(doc);
-  contextMenuDoc.value = null;
+  const target = contextMenuTarget;
+  contextMenuTarget = null;
+  if (!target) return;
+
+  if (target.type === "doc") {
+    const doc = target.doc;
+    if (key === "move") {
+      pickerContext = "move";
+      folderPickerTitle.value = "移动到…";
+      pickerExcludeDocFolderId.value = doc.folderId ?? null;
+      pendingMoveDocId.value = doc.id;
+      folderPickerVisible.value = true;
+    } else if (key === "copyPath") {
+      copyPath(doc);
+    } else if (key === "delete") {
+      removeDoc(doc);
+    }
+  } else if (target.type === "folder") {
+    const folderId = target.folderId;
+    if (key === "rename") {
+      renamingFolderId.value = folderId;
+    } else if (key === "newSub") {
+      onNewSubfolder(folderId);
+    } else if (key === "delete") {
+      const folder = store.folders.find((f) => f.id === folderId);
+      pendingDeleteFolder.value = { id: folderId, name: folder?.name ?? "" };
+      deleteFolderVisible.value = true;
+    }
+  }
 }
+
+/** 移动文档模式下：待移动的文档 id */
+const pendingMoveDocId = ref<string>("");
+
+/** 文件夹选择器确认 */
+async function onFolderPickerConfirm(folderId: string | null) {
+  folderPickerVisible.value = false;
+  if (pickerContext === "move") {
+    const docId = pendingMoveDocId.value;
+    pendingMoveDocId.value = "";
+    if (docId) {
+      await store.moveDocument(docId, folderId);
+    }
+  } else if (pickerContext === "import") {
+    // 导入目标选定后：预检冲突 → 导入
+    pendingImportFolderId.value = folderId;
+    await continueImportAfterPicker();
+  }
+}
+
+function onFolderPickerCancel() {
+  folderPickerVisible.value = false;
+  pendingMoveDocId.value = "";
+  if (pickerContext === "import") {
+    // 取消导入目标选择 = 放弃整个导入
+    pendingPaths.value = [];
+  }
+}
+
+/** 删除文件夹确认 */
+async function onConfirmDeleteFolder() {
+  const target = pendingDeleteFolder.value;
+  if (!target) return;
+  deleteFolderVisible.value = false;
+  await store.deleteFolder(target.id);
+  pendingDeleteFolder.value = null;
+}
+
+/** 导入流程：选完文件后弹出文件夹选择器选目标 */
+const pendingImportFolderId = ref<string | null>(null);
 
 // 拖拽导入：拖到窗口任意位置
 function onDrop(e: DragEvent) {
@@ -523,9 +811,27 @@ function onDragOver(e: DragEvent) {
           <button class="btn" :disabled="!currentDoc" @click="enterPresent">
             演示
           </button>
-          <button class="btn btn-primary" @click="pickAndImport" :disabled="store.importing > 0">
-            {{ store.importing > 0 ? "导入中…" : "导入" }}
-          </button>
+          <!-- 导入下拉：导入文件 / 导入文件夹 -->
+          <div class="import-dropdown">
+            <button
+              class="btn btn-primary import-trigger"
+              :disabled="store.importing > 0"
+              @click="toggleImportDropdown"
+            >
+              {{ store.importing > 0 ? "导入中…" : "导入" }}
+              <ChevronDown v-if="!store.importing" :size="12" :stroke-width="1.8" />
+            </button>
+            <div v-if="importDropdownOpen" class="import-menu">
+              <button class="import-menu-item" @click="onPickImportFiles">
+                <FileUp :size="14" :stroke-width="1.5" />
+                <span>导入 HTML 文件</span>
+              </button>
+              <button class="import-menu-item" @click="onPickImportFolder">
+                <FolderUp :size="14" :stroke-width="1.5" />
+                <span>导入文件夹</span>
+              </button>
+            </div>
+          </div>
         </template>
       </div>
     </header>
@@ -537,29 +843,53 @@ function onDragOver(e: DragEvent) {
         <div class="sidebar-inner">
           <div class="sidebar-head">
             <span>文档</span>
-            <span v-if="hasDocuments" class="sidebar-count">{{ store.documents.length }} 篇</span>
+            <div class="sidebar-head-right">
+              <span v-if="hasDocuments" class="sidebar-count">{{ store.documents.length }} 篇</span>
+              <button
+                class="icon-btn sidebar-add-btn"
+                title="新建文件夹"
+                aria-label="新建文件夹"
+                @click="onNewFolderAtRoot"
+              >
+                <Plus :size="14" :stroke-width="1.5" />
+              </button>
+            </div>
           </div>
 
           <div class="sidebar-body">
             <p v-if="store.loading" class="status">加载中…</p>
             <p v-else-if="store.error" class="status error">{{ store.error }}</p>
 
-            <!-- 空状态 -->
-            <div v-else-if="!hasDocuments" class="empty-list">
-              <p class="empty-line">暂无文档</p>
-              <p class="empty-hint">点击右上角「+ 导入」添加 HTML 文件</p>
-            </div>
+            <!-- 空库时侧边栏留空：引导由右侧预览区欢迎卡片承担 -->
 
-          <!-- 列表 -->
-          <DocumentListItem
-            v-else
-            v-for="doc in store.documents"
-            :key="doc.id"
-            :doc="doc"
-            :active="currentDoc?.id === doc.id"
-            @click="selectDoc(doc)"
-            @contextmenu="(doc, event) => onItemContextMenu(doc, event)"
-          />
+            <!-- 目录树 + 根目录文档 -->
+            <template v-else>
+              <!-- 文件夹树（一级及嵌套） -->
+              <FolderTree
+                :nodes="store.tree"
+                :level="0"
+                :active-doc-id="currentDoc?.id"
+                :expanded-ids="expandedFolderIds"
+                :renaming-id="renamingFolderId"
+                @select-doc="selectDoc"
+                @doc-contextmenu="onItemContextMenu"
+                @folder-contextmenu="onFolderContextMenu"
+                @toggle="onToggleFolder"
+                @move-doc="onMoveDoc"
+                @start-rename="onStartRename"
+                @commit-rename="onCommitRename"
+                @cancel-rename="onCancelRename"
+              />
+              <!-- 根目录下散落的文档（folderId 为空） -->
+              <DocumentListItem
+                v-for="doc in store.rootDocuments"
+                :key="doc.id"
+                :doc="doc"
+                :active="currentDoc?.id === doc.id"
+                @click="selectDoc(doc)"
+                @contextmenu="(d, ev) => onItemContextMenu(d, ev)"
+              />
+            </template>
           </div>
         </div>
       </aside>
@@ -596,11 +926,33 @@ function onDragOver(e: DragEvent) {
 
         <!-- 无选中：占位 -->
         <div v-else class="preview-empty">
-          <svg class="preview-empty-icon" width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <rect x="12" y="8" width="20" height="30" rx="3" stroke="currentColor" stroke-width="1.5"/>
-            <path d="M17 18h10M17 23h10M17 28h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          <p class="preview-empty-text">选择左侧文档以预览</p>
+          <!-- 空库：引导卡片（两个主 CTA 按钮） -->
+          <div v-if="!store.hasItems && !store.loading" class="welcome-card">
+            <div class="welcome-icon">
+              <FolderOpen :size="40" :stroke-width="1.3" />
+            </div>
+            <h2 class="welcome-title">欢迎使用 Leaf</h2>
+            <p class="welcome-subtitle">把你的 HTML 文档导入到这里，开始阅读与管理</p>
+            <div class="welcome-actions">
+              <button class="btn btn-primary welcome-btn" @click="onPickImportFiles">
+                <FileUp :size="14" :stroke-width="1.5" />
+                <span>导入 HTML 文件</span>
+              </button>
+              <button class="btn welcome-btn" @click="onPickImportFolder">
+                <FolderUp :size="14" :stroke-width="1.5" />
+                <span>导入文件夹</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 有内容但未选中：轻量占位 -->
+          <template v-else>
+            <svg class="preview-empty-icon" width="48" height="48" viewBox="0 0 48 48" fill="none">
+              <rect x="12" y="8" width="20" height="30" rx="3" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M17 18h10M17 23h10M17 28h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            <p class="preview-empty-text">选择左侧文档以预览</p>
+          </template>
         </div>
       </section>
     </main>
@@ -625,14 +977,73 @@ function onDragOver(e: DragEvent) {
       @cancel="onConflictCancel"
     />
 
-    <!-- 列表项右键菜单 -->
+    <!-- 列表项 / 文件夹右键菜单 -->
     <ContextMenu
       :visible="contextMenuVisible"
       :x="contextMenuX"
       :y="contextMenuY"
-      @copy-path="onContextCopyPath"
-      @delete="onContextDelete"
+      :items="contextMenuItems"
+      @select="onContextSelect"
       @close="contextMenuVisible = false"
+    />
+
+    <!-- 文件夹操作错误 toast（右下角，3 秒自动消失） -->
+    <transition name="fade">
+      <div v-if="folderErrorVisible" class="folder-error-toast">
+        {{ store.folderError }}
+      </div>
+    </transition>
+
+    <!-- 信息 toast（导入摘要等，右下角，3.5 秒自动消失） -->
+    <transition name="fade">
+      <div v-if="infoToastVisible" class="info-toast">
+        {{ infoToastMsg }}
+      </div>
+    </transition>
+
+    <!-- 新建文件夹对话框 -->
+    <transition name="fade">
+      <div v-if="newFolderVisible" class="overlay" @click.self="newFolderVisible = false">
+        <transition name="pop" appear>
+          <div v-if="newFolderVisible" class="dialog new-folder-dialog">
+            <div class="dialog-title">新建文件夹</div>
+            <input
+              ref="newFolderInputEl"
+              v-model="newFolderName"
+              class="new-folder-input"
+              type="text"
+              placeholder="文件夹名称"
+              @keydown.enter="confirmNewFolder"
+              @keydown.escape="newFolderVisible = false"
+            />
+            <div class="dialog-actions">
+              <button class="btn btn-cancel" @click="newFolderVisible = false">取消</button>
+              <button class="btn btn-confirm" @click="confirmNewFolder">创建</button>
+            </div>
+          </div>
+        </transition>
+      </div>
+    </transition>
+
+    <!-- 文件夹选择器（移动文档 / 导入目标） -->
+    <FolderPickerDialog
+      :visible="folderPickerVisible"
+      :folders="store.folders"
+      :title="folderPickerTitle"
+      :exclude-id="pickerExcludeDocFolderId"
+      @confirm="onFolderPickerConfirm"
+      @cancel="onFolderPickerCancel"
+    />
+
+    <!-- 删除文件夹确认 -->
+    <ConfirmDialog
+      :visible="deleteFolderVisible"
+      :title="`删除文件夹「${pendingDeleteFolder?.name ?? ''}」？`"
+      message="将同时删除其下所有子文件夹与文档，该操作不可撤销。"
+      confirm-text="删除"
+      :danger="true"
+      @confirm="onConfirmDeleteFolder"
+      @cancel="deleteFolderVisible = false; pendingDeleteFolder = null"
     />
   </div>
 </template>
@@ -963,9 +1374,19 @@ function onDragOver(e: DragEvent) {
   font-weight: 600;
   color: var(--text-dim);
 }
+.sidebar-head-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 .sidebar-count {
   font-weight: 400;
   color: var(--text-faint);
+}
+/* 新建文件夹按钮：复用 .icon-btn 尺寸（规范 4px 圆角、hover 半透明叠层） */
+.sidebar-add-btn {
+  width: 22px;
+  height: 22px;
 }
 .sidebar-body {
   flex: 1;
@@ -980,20 +1401,6 @@ function onDragOver(e: DragEvent) {
 }
 .status.error {
   color: var(--danger);
-}
-
-.empty-list {
-  padding: 24px 8px;
-}
-.empty-line {
-  margin: 0 0 6px;
-  color: var(--text-dim);
-  font-size: 14px;
-}
-.empty-hint {
-  margin: 0;
-  color: var(--text-faint);
-  font-size: 12px;
 }
 
 /* 右侧预览 */
@@ -1072,5 +1479,201 @@ function onDragOver(e: DragEvent) {
   margin: 0;
   font-size: 14px;
   color: var(--text-faint);
+}
+
+/* 空库引导卡片（位于右侧预览区，宽区，按钮横排） */
+.welcome-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 360px;
+  text-align: center;
+}
+.welcome-icon {
+  color: var(--text-faint);
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+.welcome-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+.welcome-subtitle {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.welcome-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.welcome-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+}
+
+/* ---------- 对话框（新建文件夹） ---------- */
+/* 遮罩 + 三层阴影 + 圆角 + 过渡，复用规范公式 */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 15, 15, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.dialog {
+  background: var(--bg);
+  border-radius: 8px;
+  box-shadow: rgba(15, 15, 15, 0.05) 0px 0px 0px 1px,
+    rgba(15, 15, 15, 0.1) 0px 3px 6px, rgba(15, 15, 15, 0.2) 0px 9px 24px;
+  padding: 20px 24px;
+  width: 360px;
+  max-width: 90%;
+}
+.dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 14px;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.new-folder-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.1s;
+}
+.new-folder-input:focus {
+  border-color: var(--accent-blue);
+}
+
+/* 对话框按钮：与 ConfirmDialog 一致 */
+.btn-cancel {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.btn-cancel:hover {
+  background: var(--bg-active);
+}
+.btn-confirm {
+  background: var(--accent-blue);
+  color: #fff;
+}
+.btn-confirm:hover {
+  background: var(--accent-blue-hover);
+}
+
+/* 对话框过渡（规范：0.18s ease） */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+.pop-enter-active {
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.pop-enter-from {
+  transform: scale(0.95);
+  opacity: 0;
+}
+
+/* 文件夹操作错误 toast：右下角浮层，3 秒自动消失 */
+.folder-error-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1100;
+  max-width: 320px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: rgba(15, 15, 15, 0.05) 0px 0px 0px 1px,
+    rgba(15, 15, 15, 0.1) 0px 3px 6px, rgba(15, 15, 15, 0.2) 0px 9px 24px;
+}
+
+/* 信息 toast（导入摘要等）：右下角，与 error toast 错开高度避免重叠 */
+.info-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1100;
+  max-width: 360px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: rgba(15, 15, 15, 0.05) 0px 0px 0px 1px,
+    rgba(15, 15, 15, 0.1) 0px 3px 6px, rgba(15, 15, 15, 0.2) 0px 9px 24px;
+}
+
+/* 导入下拉 */
+.import-dropdown {
+  position: relative;
+}
+.import-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.import-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  min-width: 180px;
+  padding: 4px;
+  background: var(--bg);
+  border-radius: 8px;
+  box-shadow: rgba(15, 15, 15, 0.05) 0px 0px 0px 1px,
+    rgba(15, 15, 15, 0.1) 0px 3px 6px, rgba(15, 15, 15, 0.2) 0px 9px 24px;
+}
+.import-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.import-menu-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 </style>

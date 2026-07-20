@@ -14,6 +14,8 @@ export interface Document {
   importedAt: number
   /** 原文件创建时间，Unix 毫秒 */
   sourceCreatedAt: number
+  /** 所属文件夹 id；null/undefined 表示位于根目录 */
+  folderId?: string | null
 }
 
 /** 一条「待导入文件与库内已有文档撞名」的预检结果。 */
@@ -26,4 +28,42 @@ export interface ConflictInfo {
   existingDocId: string
   /** 库中已存在文档的标题（弹窗展示用） */
   existingTitle: string
+}
+
+/** 文件夹，对应 Rust 侧 db::Folder。含根目录在内最多 3 级。
+ *  level = 1 表示根目录下的一级文件夹，2 表示二级，3 表示三级。 */
+export interface Folder {
+  id: string
+  name: string
+  /** 父文件夹 id；null 表示位于根目录（level = 1） */
+  parentId: string | null
+  /** 创建时间，Unix 毫秒 */
+  createdAt: number
+  /** 层级：1 / 2 / 3 */
+  level: number
+}
+
+/** 树节点：文件夹 + 其子文件夹 + 其下文档。用于侧栏目录树渲染。 */
+export interface FolderTreeNode {
+  folder: Folder
+  /** 直接子文件夹（递归） */
+  children: FolderTreeNode[]
+  /** 该文件夹下（非递归）的文档 */
+  docs: Document[]
+}
+
+/** 导入文件夹的结果摘要。对应 Rust 侧 DirectoryImportResult。 */
+export interface DirectoryImportResult {
+  /** 成功导入的文档数 */
+  importedCount: number
+  /** 因根级同名已存在而跳过的文档数 */
+  skippedCount: number
+  /** 因原始目录超过 3 级被拍平到第 3 级的文档数 */
+  flattenedCount: number
+  /** 新建的文件夹数 */
+  folderCount: number
+  /** 收集到的首个失败原因（用于诊断）。空字符串表示无失败。 */
+  firstError: string
+  /** 因读取/解析/写入失败而被跳过的文件数 */
+  failedCount: number
 }

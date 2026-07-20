@@ -1,0 +1,278 @@
+<script setup lang="ts">
+/**
+ * 文件夹目录树（递归组件）。
+ *
+ * 渲染规则：每个树节点 = 一个文件夹行 + 其下文档 + 递归的子文件夹。
+ * 支持展开收起、右键菜单、拖拽文档进入、双击重命名。
+ *
+ * 视觉严格遵循 01 设计规范：暖灰半透明叠层、Lucide 图标 14/1.5、
+ * 列表项圆角 6px、悬停 0.1s、展开过渡 0.25s ease、缩进每级 12px。
+ */
+import { ref } from "vue";
+import { ChevronRight, ChevronDown, Folder, FolderOpen } from "@lucide/vue";
+import type { Document, FolderTreeNode } from "../types/document";
+import DocumentListItem from "./DocumentListItem.vue";
+
+/** 自定义指令：元素插入时自动聚焦并全选文本（用于重命名输入框） */
+const vFocus = {
+  mounted(el: HTMLInputElement) {
+    el.focus();
+    el.select();
+  },
+};
+
+const props = defineProps<{
+  /** 当前层级的树节点数组 */
+  nodes: FolderTreeNode[]
+  /** 层级深度（根 = 0，用于缩进计算） */
+  level: number
+  /** 当前选中的文档 id（高亮） */
+  activeDocId?: string
+  /** 展开的文件夹 id 集合（由顶层统一管理状态） */
+  expandedIds: Set<string>
+  /** 正在内联重命名的文件夹 id */
+  renamingId?: string | null
+}>();
+
+const emit = defineEmits<{
+  /** 点击文档 */
+  selectDoc: [doc: Document]
+  /** 文档右键 */
+  docContextmenu: [doc: Document, event: MouseEvent]
+  /** 文件夹右键 */
+  folderContextmenu: [folderId: string, event: MouseEvent]
+  /** 切换文件夹展开/收起 */
+  toggle: [folderId: string]
+  /** 拖拽文档到文件夹释放 */
+  moveDoc: [docId: string, folderId: string]
+  /** 进入重命名编辑态（双击触发） */
+  startRename: [folderId: string]
+  /** 提交重命名（Enter / blur） */
+  commitRename: [folderId: string, newName: string]
+  /** 取消重命名（Esc） */
+  cancelRename: []
+}>();
+
+// 拖拽高亮的文件夹 id
+const dragOverId = ref<string | null>(null);
+// 重命名输入框的当前值
+const renameInput = ref("");
+
+function isExpanded(folderId: string): boolean {
+  return props.expandedIds.has(folderId);
+}
+
+/** 点击文件夹行：切换展开 + 不阻止文档选中（文件夹本身不"选中"文档） */
+function onFolderClick(node: FolderTreeNode) {
+  emit("toggle", node.folder.id);
+}
+
+/** 文件夹右键 */
+function onFolderContextmenu(node: FolderTreeNode, e: MouseEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+  emit("folderContextmenu", node.folder.id, e);
+}
+
+/** 双击文件夹名进入重命名编辑态 */
+function onFolderDblclick(node: FolderTreeNode) {
+  renameInput.value = node.folder.name;
+  emit("startRename", node.folder.id);
+}
+
+/** 文档拖到文件夹上 */
+function onDragover(node: FolderTreeNode, e: DragEvent) {
+  // 仅当拖的是文档（带 text/doc-id）时才高亮
+  if (e.dataTransfer?.types.includes("text/doc-id")) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    dragOverId.value = node.folder.id;
+  }
+}
+
+function onDragleave(node: FolderTreeNode) {
+  if (dragOverId.value === node.folder.id) {
+    dragOverId.value = null;
+  }
+}
+
+function onDrop(node: FolderTreeNode, e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+  dragOverId.value = null;
+  const docId = e.dataTransfer?.getData("text/doc-id");
+  if (docId) {
+    emit("moveDoc", docId, node.folder.id);
+  }
+}
+
+/** 重命名输入框：Enter 提交 / Esc 取消 */
+function onRenameKeydown(node: FolderTreeNode, e: KeyboardEvent) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const name = renameInput.value.trim();
+    if (name && name !== node.folder.name) {
+      emit("commitRename", node.folder.id, name);
+    } else {
+      emit("cancelRename");
+    }
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    emit("cancelRename");
+  }
+}
+
+/** 重命名输入框失焦：提交 */
+function onRenameBlur(node: FolderTreeNode) {
+  const name = renameInput.value.trim();
+  if (name && name !== node.folder.name) {
+    emit("commitRename", node.folder.id, name);
+  } else {
+    emit("cancelRename");
+  }
+}
+</script>
+
+<template>
+  <div class="folder-tree">
+    <!-- 遍历当前层级的每个节点 -->
+    <div v-for="node in nodes" :key="node.folder.id" class="tree-node">
+      <!-- 文件夹行 -->
+      <div
+        class="folder-row"
+        :class="{ 'drag-over': dragOverId === node.folder.id }"
+        :style="{ paddingLeft: 8 + level * 12 + 'px' }"
+        @click="onFolderClick(node)"
+        @contextmenu="onFolderContextmenu(node, $event)"
+        @dblclick="onFolderDblclick(node)"
+        @dragover="onDragover(node, $event)"
+        @dragleave="onDragleave(node)"
+        @drop="onDrop(node, $event)"
+      >
+        <!-- 展开/收起箭头：图标显示「点击后的动作」（规范 4.2） -->
+        <component
+          :is="isExpanded(node.folder.id) ? ChevronDown : ChevronRight"
+          :size="14"
+          :stroke-width="1.5"
+          class="chevron"
+        />
+        <!-- 文件夹图标：收起用 Folder，展开用 FolderOpen -->
+        <component
+          :is="isExpanded(node.folder.id) ? FolderOpen : Folder"
+          :size="14"
+          :stroke-width="1.5"
+          class="folder-icon"
+        />
+        <!-- 名称或重命名输入框 -->
+        <input
+          v-if="renamingId === node.folder.id"
+          v-focus
+          v-model="renameInput"
+          class="rename-input"
+          type="text"
+          @click.stop
+          @dblclick.stop
+          @contextmenu.stop
+          @keydown="onRenameKeydown(node, $event)"
+          @blur="onRenameBlur(node)"
+        />
+        <span v-else class="folder-name">{{ node.folder.name }}</span>
+      </div>
+
+      <!-- 展开内容：子文档 + 递归子文件夹 -->
+      <transition name="expand">
+        <div v-show="isExpanded(node.folder.id)" class="folder-content">
+          <!-- 文档 -->
+          <DocumentListItem
+            v-for="doc in node.docs"
+            :key="doc.id"
+            :doc="doc"
+            :active="activeDocId === doc.id"
+            :indent="level + 1"
+            @click="emit('selectDoc', doc)"
+            @contextmenu="(d, ev) => emit('docContextmenu', d, ev)"
+          />
+          <!-- 递归子文件夹 -->
+          <FolderTree
+            :nodes="node.children"
+            :level="level + 1"
+            :active-doc-id="activeDocId"
+            :expanded-ids="expandedIds"
+            :renaming-id="renamingId"
+            @select-doc="(d: Document) => emit('selectDoc', d)"
+            @doc-contextmenu="(d: Document, ev: MouseEvent) => emit('docContextmenu', d, ev)"
+            @folder-contextmenu="(fid: string, ev: MouseEvent) => emit('folderContextmenu', fid, ev)"
+            @toggle="(fid: string) => emit('toggle', fid)"
+            @move-doc="(did: string, fid: string) => emit('moveDoc', did, fid)"
+            @start-rename="(fid: string) => emit('startRename', fid)"
+            @commit-rename="(fid: string, n: string) => emit('commitRename', fid, n)"
+            @cancel-rename="emit('cancelRename')"
+          />
+        </div>
+      </transition>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  padding-right: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+  user-select: none;
+}
+.folder-row:hover {
+  background: var(--bg-hover);
+}
+.folder-row.drag-over {
+  background: var(--bg-active);
+}
+
+.chevron {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+.folder-icon {
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.folder-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 1px 4px;
+  margin: 0;
+  border: 1px solid var(--accent-blue);
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  font-family: inherit;
+  outline: none;
+}
+
+/* 展开过渡（规范：0.25s ease） */
+.expand-enter-active,
+.expand-leave-active {
+  transition: opacity 0.25s ease;
+  overflow: hidden;
+}
+.expand-enter-from,
+.expand-leave-to {
+  opacity: 0;
+}
+</style>

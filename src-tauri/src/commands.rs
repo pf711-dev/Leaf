@@ -1,6 +1,7 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use crate::db::{Database, Document};
+use crate::db::{Database, Document, Folder};
 use crate::{library, parser};
 use serde::Serialize;
 
@@ -41,17 +42,19 @@ pub struct ConflictInfo {
 ///
 /// `paths` 是源文件的绝对路径列表（来自文件选择对话框或拖拽）。
 /// `resolution` 是撞名时的处理方式："skip"（默认）/ "overwrite"。
+/// `folder_id` 是目标文件夹 id；None 表示导入到根目录。
 /// 返回成功导入的文档列表。单个文件失败不会中断其余文件。
 #[tauri::command]
 pub fn import_files(
     db: tauri::State<'_, Database>,
     paths: Vec<String>,
     resolution: Option<String>,
+    folder_id: Option<String>,
 ) -> Vec<Document> {
     let resolution = Resolution::parse(resolution.as_deref());
     let mut imported = Vec::new();
     for path_str in &paths {
-        match import_single(&db, path_str, resolution) {
+        match import_single(&db, path_str, resolution, folder_id.as_deref()) {
             Ok(doc) => imported.push(doc),
             Err(e) => {
                 eprintln!("导入失败 {}: {}", path_str, e);
@@ -138,10 +141,12 @@ pub fn get_document_path(library_path: String) -> Result<String, String> {
 ///
 /// 返回 Err 仅表示「这个文件导入失败」（如文件读取错误），会被上层跳过。
 /// 撞名且 resolution=Skip 时，也用 Err 返回标记跳过（上层统一处理）。
+/// `folder_id` 指定导入到哪个文件夹（None 表示根目录）。
 fn import_single(
     db: &Database,
     path_str: &str,
     resolution: Resolution,
+    folder_id: Option<&str>,
 ) -> Result<Document, Box<dyn std::error::Error>> {
     let source = PathBuf::from(path_str);
     let file_name = source
@@ -193,7 +198,367 @@ fn import_single(
         summary: parsed.summary,
         imported_at: now,
         source_created_at: now,
+        folder_id: folder_id.map(|s| s.to_string()),
     };
     db.insert(&doc)?;
     Ok(doc)
+}
+
+// ==================== 文件夹命令 ====================
+
+/// 最大文件夹层级（含根目录）。level=1 是根目录下的一级文件夹，3 是最深层。
+const MAX_FOLDER_LEVEL: i64 = 3;
+
+/// 前端调用：新建文件夹。
+///
+/// `parent_id` 为 None 表示在根目录下创建（level = 1）。
+/// 父文件夹已达最大层级时返回错误。
+#[tauri::command]
+pub fn create_folder(
+    db: tauri::State<'_, Database>,
+    name: String,
+    parent_id: Option<String>,
+) -> Result<Folder, String> {
+    // 计算新文件夹的 level
+    let level = match &parent_id {
+        None => 1,
+        Some(pid) => {
+            let parent = db
+                .get_folder(pid)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "父文件夹不存在".to_string())?;
+            if parent.level >= MAX_FOLDER_LEVEL {
+                return Err(format!(
+                    "已达最大层级（{} 级），无法继续创建子文件夹",
+                    MAX_FOLDER_LEVEL
+                ));
+            }
+            parent.level + 1
+        }
+    };
+
+    let folder = Folder {
+        id: uuid::Uuid::new_v4().to_string(),
+        name,
+        parent_id,
+        created_at: chrono::Utc::now().timestamp_millis(),
+        level,
+    };
+    db.insert_folder(&folder).map_err(|e| e.to_string())?;
+    Ok(folder)
+}
+
+/// 前端调用：列出全部文件夹（扁平列表，前端组装成树）。
+#[tauri::command]
+pub fn list_folders(db: tauri::State<'_, Database>) -> Vec<Folder> {
+    db.list_folders().unwrap_or_default()
+}
+
+/// 前端调用：重命名文件夹。
+#[tauri::command]
+pub fn rename_folder(
+    db: tauri::State<'_, Database>,
+    id: String,
+    new_name: String,
+) -> Result<(), String> {
+    db.rename_folder(&id, &new_name).map_err(|e| e.to_string())
+}
+
+/// 前端调用：删除文件夹。
+///
+/// 递归删除该文件夹下所有子文件夹与文档（库文件 + 数据库记录）。
+#[tauri::command]
+pub fn delete_folder(db: tauri::State<'_, Database>, id: String) -> Result<(), String> {
+    // BFS 收集所有子孙文件夹 id（含自身）
+    let mut all_ids: Vec<String> = vec![id.clone()];
+    let mut queue: Vec<String> = vec![id.clone()];
+    while let Some(cur) = queue.pop() {
+        let subs = db.find_subfolders(&cur).map_err(|e| e.to_string())?;
+        for sub in subs {
+            all_ids.push(sub.id.clone());
+            queue.push(sub.id);
+        }
+    }
+
+    // 删除每个文件夹下的所有文档（库文件 + DB 记录）
+    for fid in &all_ids {
+        let docs = db.find_documents_in_folder(Some(fid)).map_err(|e| e.to_string())?;
+        for doc in &docs {
+            let _ = library::delete_library_file(&doc.library_path);
+            db.delete(&doc.id).map_err(|e| e.to_string())?;
+        }
+    }
+
+    // 删除所有文件夹记录
+    for fid in &all_ids {
+        db.delete_folder_row(fid).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// 前端调用：把文档移动到指定文件夹（folder_id 为 None 表示移到根目录）。
+#[tauri::command]
+pub fn move_document(
+    db: tauri::State<'_, Database>,
+    doc_id: String,
+    folder_id: Option<String>,
+) -> Result<(), String> {
+    db.update_document_folder(&doc_id, folder_id.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+// ==================== 导入文件夹 ====================
+
+/// 导入文件夹的结果摘要。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryImportResult {
+    /// 成功导入的文档数
+    pub imported_count: u32,
+    /// 因根级同名已存在而跳过的文档数
+    pub skipped_count: u32,
+    /// 因原始目录超过 3 级被拍平到第 3 级的文档数
+    pub flattened_count: u32,
+    /// 新建 / 复用的文件夹数
+    pub folder_count: u32,
+    /// 收集到的首个失败原因（用于前端诊断；多个失败只记第一个）。
+    /// 空字符串表示无失败。
+    pub first_error: String,
+    /// 因读取/解析/写入失败而被跳过的文件数
+    pub failed_count: u32,
+}
+
+/// 一条待导入文件：源绝对路径 + 相对根目录的路径段（用于决定挂到哪个文件夹）。
+struct CollectedFile {
+    source: PathBuf,
+    /// 相对路径段（不含文件名）。例如 "a/b/c.html" → ["a", "b"]
+    /// 长度即目录深度：0=根目录散落，1=一级文件夹，2=二级，3+ 都归到第 3 级
+    dir_segments: Vec<String>,
+    /// 原始文件名（含 .html）
+    file_name: String,
+}
+
+/// 递归收集目录下所有 HTML 文件及其相对路径段。
+fn collect_html_files(root: &Path) -> Vec<CollectedFile> {
+    let mut out = Vec::new();
+    walk_dir(root, root, &mut out);
+    out
+}
+
+/// 递归遍历。base 是根目录，用于计算相对路径段。
+fn walk_dir(current: &Path, base: &Path, out: &mut Vec<CollectedFile>) {
+    let entries = match std::fs::read_dir(current) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_dir(&path, base, out);
+        } else if is_html(&path) {
+            // 计算相对 base 的目录段
+            let dir_segments: Vec<String> = path
+                .parent()
+                .and_then(|p| p.strip_prefix(base).ok())
+                .map(|rel| {
+                    rel.components()
+                        .filter_map(|c| c.as_os_str().to_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let file_name = path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "unknown.html".to_string());
+            out.push(CollectedFile {
+                source: path,
+                dir_segments,
+                file_name,
+            });
+        }
+    }
+}
+
+/// 判断是否 HTML 文件（按扩展名，大小写不敏感）。
+fn is_html(path: &Path) -> bool {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => matches!(ext.to_lowercase().as_str(), "html" | "htm"),
+        None => false,
+    }
+}
+
+/// 把相对路径段拍平到最多 3 级。
+/// 超过 3 段的部分直接截断到第 3 段（深层文档挂到第 3 级文件夹）。
+/// 返回：(截断后的段, 是否被拍平)
+fn clamp_segments(segments: Vec<String>) -> (Vec<String>, bool) {
+    const MAX_DEPTH: usize = 3;
+    if segments.len() <= MAX_DEPTH {
+        (segments, false)
+    } else {
+        (segments.into_iter().take(MAX_DEPTH).collect(), true)
+    }
+}
+
+/// 把目录段解析成 folder_id（按需创建文件夹并缓存）。
+/// 缓存 key = (parent_id, name)，已存在就复用，避免重复建同名文件夹。
+fn resolve_folder_id(
+    db: &Database,
+    segments: &[String],
+    cache: &mut HashMap<(Option<String>, String), String>,
+    folder_counter: &mut u32,
+) -> Result<Option<String>, String> {
+    if segments.is_empty() {
+        return Ok(None);
+    }
+    let mut parent_id: Option<String> = None;
+    let mut level: i64 = 1;
+    for seg in segments {
+        let key = (parent_id.clone(), seg.clone());
+        let id = match cache.get(&key) {
+            Some(id) => id.clone(),
+            None => {
+                let id = uuid::Uuid::new_v4().to_string();
+                let folder = Folder {
+                    id: id.clone(),
+                    name: seg.clone(),
+                    parent_id: parent_id.clone(),
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    level,
+                };
+                db.insert_folder(&folder).map_err(|e| e.to_string())?;
+                cache.insert(key, id.clone());
+                *folder_counter += 1;
+                id
+            }
+        };
+        parent_id = Some(id);
+        level += 1;
+    }
+    Ok(parent_id)
+}
+
+/// 把单个文件导入到指定文件夹。
+///
+/// `dest_name` 已处理过跨目录同名前缀，`folder_id` 已由调用方解析好。
+/// 返回 Ok(true)=已导入，Ok(false)=因根级同名跳过。
+fn import_file_at(
+    db: &Database,
+    file: &CollectedFile,
+    dest_name: &str,
+    folder_id: Option<&str>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    // 读取文件：优先按 UTF-8 读，失败则按字节读并做无损转换（UTF-8 无效字节替换为 U+FFFD）。
+    // 这样 GBK/GB2312 等非 UTF-8 编码的 HTML 也能导入（内容可能有乱码，但不至于整篇失败）。
+    let content = match std::fs::read_to_string(&file.source) {
+        Ok(s) => s,
+        Err(_) => {
+            let bytes = std::fs::read(&file.source)?;
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+    };
+    let parsed = parser::parse(&content);
+    let id = uuid::Uuid::new_v4().to_string();
+    let title = parsed.title.clone().unwrap_or_else(|| {
+        file.source
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
+    let (_, size) = library::import_file_named(&file.source, dest_name)?;
+    let now = chrono::Utc::now().timestamp_millis();
+    let doc = Document {
+        id,
+        title,
+        file_name: file.file_name.clone(),
+        library_path: dest_name.to_string(),
+        file_size: size,
+        summary: parsed.summary,
+        imported_at: now,
+        source_created_at: now,
+        folder_id: folder_id.map(|s| s.to_string()),
+    };
+    db.insert(&doc)?;
+    Ok(true)
+}
+
+/// 前端调用：导入整个文件夹（连同目录结构一起导入）。
+///
+/// 递归遍历 root 下所有 HTML，按相对路径重建 DB 文件夹层级（最多 3 级，
+/// 超出部分拍平到第 3 级）。根级同名文件跳过，子目录同名文件加前缀避免冲突。
+/// 单个文件失败不中断其余。
+#[tauri::command]
+pub fn import_directory(
+    db: tauri::State<'_, Database>,
+    root_path: String,
+) -> Result<DirectoryImportResult, String> {
+    let root = PathBuf::from(&root_path);
+    if !root.is_dir() {
+        return Err("所选路径不是文件夹".to_string());
+    }
+
+    let files = collect_html_files(&root);
+    if files.is_empty() {
+        return Err("该文件夹下没有 HTML 文件".to_string());
+    }
+
+    // 文件夹缓存：key=(parent_id, name) → folder_id。
+    // 在整个命令级别共享，避免对同一目录重复建文件夹。
+    let mut folder_cache: HashMap<(Option<String>, String), String> = HashMap::new();
+    let mut folder_count: u32 = 0;
+
+    let mut imported = 0u32;
+    let mut skipped = 0u32;
+    let mut flattened = 0u32;
+    let mut failed = 0u32;
+    let mut first_error = String::new();
+
+    for file in &files {
+        // 拍平到最多 3 级
+        let (segments, was_flattened) = clamp_segments(file.dir_segments.clone());
+        if was_flattened {
+            flattened += 1;
+        }
+
+        // 解析 folder_id（按需建文件夹，缓存命中则复用）
+        let folder_id = resolve_folder_id(&db, &segments, &mut folder_cache, &mut folder_count)?;
+
+        // 库内文件名：根目录散落用原始名，子目录加前缀避免跨目录同名物理冲突
+        let dest_name = if segments.is_empty() {
+            file.file_name.clone()
+        } else {
+            format!("{}__{}", segments.join("__"), file.file_name)
+        };
+
+        // 根级散落文件做全局同名去重；子目录文件因已加前缀不会撞
+        if segments.is_empty() {
+            if let Ok(existing) = db.find_by_filename(&file.file_name) {
+                if !existing.is_empty() {
+                    skipped += 1;
+                    continue;
+                }
+            }
+        }
+
+        match import_file_at(&db, file, &dest_name, folder_id.as_deref()) {
+            Ok(true) => imported += 1,
+            Ok(false) => skipped += 1,
+            Err(e) => {
+                let msg = format!("{}: {}", file.source.display(), e);
+                eprintln!("导入失败 {}", msg);
+                if first_error.is_empty() {
+                    first_error = msg;
+                }
+                failed += 1;
+            }
+        }
+    }
+
+    Ok(DirectoryImportResult {
+        imported_count: imported,
+        skipped_count: skipped,
+        flattened_count: flattened,
+        folder_count,
+        first_error,
+        failed_count: failed,
+    })
 }

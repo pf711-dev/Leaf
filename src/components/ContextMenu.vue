@@ -1,15 +1,31 @@
 <script setup lang="ts">
-defineProps<{
+/** 通用右键菜单：items 驱动，可同时服务文档、文件夹等不同场景。
+ *  调用方传入 items 配置，通过 select(key) 事件获知用户点击了哪一项。 */
+export interface MenuItem {
+  /** 事件 key，回传给调用方 */
+  key: string
+  /** 显示文案 */
+  label: string
+  /** 危险项（删除等）：hover 时变红 */
+  danger?: boolean
+}
+
+const props = defineProps<{
   visible: boolean
   x: number
   y: number
-}>()
+  items: MenuItem[]
+}>();
 
 const emit = defineEmits<{
-  copyPath: []
-  delete: []
+  select: [key: string]
   close: []
-}>()
+}>();
+
+function onClick(key: string) {
+  emit("select", key);
+  emit("close");
+}
 </script>
 
 <template>
@@ -22,8 +38,15 @@ const emit = defineEmits<{
           :style="{ left: x + 'px', top: y + 'px' }"
           @click.stop
         >
-          <button class="menu-item" @click="emit('copyPath')">复制文件路径</button>
-          <button class="menu-item menu-item-danger" @click="emit('delete')">删除</button>
+          <button
+            v-for="item in props.items"
+            :key="item.key"
+            class="menu-item"
+            :class="{ 'menu-item-danger': item.danger }"
+            @click="onClick(item.key)"
+          >
+            {{ item.label }}
+          </button>
         </div>
       </transition>
     </div>
