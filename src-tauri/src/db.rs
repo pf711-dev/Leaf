@@ -228,6 +228,21 @@ impl Database {
         Ok(())
     }
 
+    /// 移动文件夹：更新 parent_id 和 level。
+    pub fn update_folder_parent(
+        &self,
+        id: &str,
+        new_parent_id: Option<&str>,
+        new_level: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE folders SET parent_id = ?1, level = ?2 WHERE id = ?3",
+            params![new_parent_id, new_level, id],
+        )?;
+        Ok(())
+    }
+
     /// 仅删除文件夹自身这一行记录（不连带删除子孙与文档，递归由 commands 层负责）。
     pub fn delete_folder_row(&self, id: &str) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();

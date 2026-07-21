@@ -48,6 +48,7 @@ pub fn run() {
             commands::rename_folder,
             commands::delete_folder,
             commands::move_document,
+            commands::move_folder,
             commands::import_directory,
             plugins::mac_rounded_corners::enable_rounded_corners,
             plugins::mac_rounded_corners::enable_modern_window_style,

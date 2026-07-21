@@ -11,6 +11,7 @@ import {
   listDocuments,
   listFolders,
   moveDocument as apiMoveDocument,
+  moveFolder as apiMoveFolder,
   renameFolder as apiRenameFolder,
 } from "../api/client";
 import type { ConflictResolution } from "../api/client";
@@ -187,6 +188,18 @@ export const useDocumentsStore = defineStore("documents", () => {
     }
   }
 
+  /** 把文件夹移动到另一个父级下（newParentId 为 null 表示移到根目录） */
+  async function moveFolder(folderId: string, newParentId: string | null): Promise<boolean> {
+    try {
+      await apiMoveFolder(folderId, newParentId);
+      await refresh();
+      return true;
+    } catch (e) {
+      folderError.value = String(e);
+      return false;
+    }
+  }
+
   return {
     documents,
     folders,
@@ -208,5 +221,6 @@ export const useDocumentsStore = defineStore("documents", () => {
     renameFolder,
     deleteFolder,
     moveDocument,
+    moveFolder,
   };
 });

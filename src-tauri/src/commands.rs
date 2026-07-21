@@ -306,6 +306,92 @@ pub fn move_document(
         .map_err(|e| e.to_string())
 }
 
+/// 前端调用：把文件夹移到另一个父级下（folder_id 为 None 表示移到根目录）。
+///
+/// 校验规则：
+/// - 目标父文件夹必须存在且 level < 3
+/// - 移动后该文件夹及其子孙的层级均不得超过 3
+/// - 不能移动到自身或自己的子孙下（前端通过 excludeId 保证，后端做防御校验）
+#[tauri::command]
+pub fn move_folder(
+    db: tauri::State<'_, Database>,
+    folder_id: String,
+    new_parent_id: Option<String>,
+) -> Result<(), String> {
+    // 1. 获取被移动的文件夹
+    let folder = db
+        .get_folder(&folder_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "文件夹不存在".to_string())?;
+
+    // 2. 计算新层级
+    let new_level = match &new_parent_id {
+        None => 1,
+        Some(pid) => {
+            if *pid == folder_id {
+                return Err("不能将文件夹移到它自己里面".to_string());
+            }
+            let parent = db
+                .get_folder(pid)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "目标文件夹不存在".to_string())?;
+            if parent.level >= MAX_FOLDER_LEVEL {
+                return Err(format!(
+                    "已达最大层级（{} 级），无法放入子文件夹",
+                    MAX_FOLDER_LEVEL
+                ));
+            }
+            parent.level + 1
+        }
+    };
+
+    // 3. 收集子孙文件夹（BFS）
+    let mut descendants: Vec<String> = Vec::new();
+    let mut queue: Vec<String> = vec![folder_id.clone()];
+    while let Some(cur) = queue.pop() {
+        let subs = db.find_subfolders(&cur).map_err(|e| e.to_string())?;
+        for sub in subs {
+            // 防御：不能移到子孙下
+            if Some(&sub.id) == new_parent_id.as_ref() {
+                return Err("不能将文件夹移到它自己的子文件夹下".to_string());
+            }
+            descendants.push(sub.id.clone());
+            queue.push(sub.id);
+        }
+    }
+
+    // 4. 校验所有子孙的层级不越界
+    let level_shift = new_level - folder.level;
+    for desc_id in &descendants {
+        let desc = db
+            .get_folder(desc_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "子孙文件夹不存在".to_string())?;
+        if desc.level + level_shift > MAX_FOLDER_LEVEL {
+            return Err(format!(
+                "移动后「{}」的层级将超过 {} 级上限",
+                desc.name, MAX_FOLDER_LEVEL
+            ));
+        }
+    }
+
+    // 5. 更新自身 parent_id 和 level
+    db.update_folder_parent(&folder_id, new_parent_id.as_deref(), new_level)
+        .map_err(|e| e.to_string())?;
+
+    // 6. 递归更新所有子孙的 level
+    for desc_id in &descendants {
+        let desc = db.get_folder(desc_id).map_err(|e| e.to_string())?;
+        if let Some(desc) = desc {
+            let desc_new_level = desc.level + level_shift;
+            db.update_folder_parent(desc_id, desc.parent_id.as_deref(), desc_new_level)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
 // ==================== 导入文件夹 ====================
 
 /// 导入文件夹的结果摘要。

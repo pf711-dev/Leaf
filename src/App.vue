@@ -139,8 +139,23 @@ function toggleSidebar() {
 // 演示（沉浸式）模式
 const presenting = ref(false);
 const sidebarWasCollapsed = ref(false);
-const presentHintVisible = ref(false);
-let presentHintTimer: ReturnType<typeof setTimeout> | null = null;
+
+// 统一 toast：顶部居中浮层，替换所有右下角 / 分散位置的提示
+// type: 'info'（默认蓝灰）| 'error'（暖红）
+const toastMessage = ref("");
+const toastType = ref<"info" | "error">("info");
+const toastVisible = ref(false);
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showToast(msg: string, type: "info" | "error" = "info", duration = 3500) {
+  if (toastTimer) clearTimeout(toastTimer);
+  toastMessage.value = msg;
+  toastType.value = type;
+  toastVisible.value = true;
+  toastTimer = setTimeout(() => {
+    toastVisible.value = false;
+  }, duration);
+}
 
 // 编辑模式：整页可写 + 顶部工具栏。与演示模式互斥。
 const editing = ref(false);
@@ -182,18 +197,16 @@ const bgColors = [
 ];
 
 function enterPresent() {
-  if (editing.value) exitEdit();   // 与编辑模式互斥
+  if (editing.value) exitEdit();
   sidebarWasCollapsed.value = sidebarCollapsed.value;
   sidebarCollapsed.value = true;
   presenting.value = true;
-  // 短暂提示「按 Esc 退出」，2.5 秒后淡出
-  showPresentHint();
+  showToast("按 Esc 退出演示", "info", 2500);
 }
 
 function exitPresent() {
   presenting.value = false;
   sidebarCollapsed.value = sidebarWasCollapsed.value;
-  hidePresentHint();
 }
 
 // ---------- 编辑模式 ----------
@@ -248,49 +261,19 @@ function postToIframe(msg: object) {
   iframeRef.value?.contentWindow?.postMessage(msg, "*");
 }
 
-function showPresentHint() {
-  presentHintVisible.value = true;
-  if (presentHintTimer) clearTimeout(presentHintTimer);
-  presentHintTimer = setTimeout(() => {
-    presentHintVisible.value = false;
-  }, 2500);
-}
-
-function hidePresentHint() {
-  presentHintVisible.value = false;
-  if (presentHintTimer) {
-    clearTimeout(presentHintTimer);
-    presentHintTimer = null;
-  }
-}
-
-// 文件夹操作错误 toast：watch store.folderError，有值时显示 3 秒后自动清空
-const folderErrorVisible = ref(false);
-let folderErrorTimer: ReturnType<typeof setTimeout> | null = null;
+// 文件夹操作错误：通过统一 toast 显示
 watch(
   () => store.folderError,
   (msg) => {
     if (!msg) return;
-    folderErrorVisible.value = true;
-    if (folderErrorTimer) clearTimeout(folderErrorTimer);
-    folderErrorTimer = setTimeout(() => {
-      folderErrorVisible.value = false;
-      store.folderError = "";
-    }, 3000);
+    showToast(msg, "error", 3000);
+    // 延迟清空 store 中的错误，防止组件反复触发
+    setTimeout(() => { store.folderError = ""; }, 3100);
   },
 );
 
-// 信息 toast（成功 / 摘要类，蓝色调，与 error toast 视觉区分）
-const infoToastVisible = ref(false);
-const infoToastMsg = ref("");
-let infoToastTimer: ReturnType<typeof setTimeout> | null = null;
 function showInfoToast(msg: string) {
-  infoToastMsg.value = msg;
-  infoToastVisible.value = true;
-  if (infoToastTimer) clearTimeout(infoToastTimer);
-  infoToastTimer = setTimeout(() => {
-    infoToastVisible.value = false;
-  }, 3500);
+  showToast(msg, "info", 3500);
 }
 
 /** Esc 退出演示 / Cmd+B 切换侧边栏 */
@@ -604,7 +587,7 @@ const folderPickerVisible = ref(false);
 const folderPickerTitle = ref("选择文件夹");
 /** 'move'（移动文档）| 'import'（导入目标） */
 /** 'move'（移动单个文档）| 'batchMove'（批量移动）| 'import'（导入目标） */
-let pickerContext: "move" | "batchMove" | "import" | "importFolder" = "move";
+let pickerContext: "move" | "batchMove" | "import" | "importFolder" | "moveFolder" = "move";
 /** 移动文档模式下：待移动的文档 id（用于 excludeId 防止移到原文件夹） */
 const pickerExcludeDocFolderId = ref<string | null>(null);
 
@@ -701,7 +684,10 @@ function onFolderContextMenu(folderId: string, e: MouseEvent) {
   contextMenuTarget = { type: "folder", folderId };
   const folder = store.folders.find((f) => f.id === folderId);
   const isMaxLevel = (folder?.level ?? 0) >= 3;
-  const items: MenuItem[] = [{ key: "rename", label: "重命名" }];
+  const items: MenuItem[] = [
+    { key: "rename", label: "重命名" },
+    { key: "moveFolder", label: "移动到…" },
+  ];
   if (!isMaxLevel) {
     items.push({ key: "newSub", label: "新建子文件夹" });
   }
@@ -752,6 +738,12 @@ function onContextSelect(key: string) {
     const folderId = target.folderId;
     if (key === "rename") {
       renamingFolderId.value = folderId;
+    } else if (key === "moveFolder") {
+      pickerContext = "moveFolder";
+      folderPickerTitle.value = "移动到…";
+      pickerExcludeDocFolderId.value = folderId;
+      pendingMoveFolderId.value = folderId;
+      folderPickerVisible.value = true;
     } else if (key === "newSub") {
       onNewSubfolder(folderId);
     } else if (key === "delete") {
@@ -764,6 +756,9 @@ function onContextSelect(key: string) {
 
 /** 移动文档模式下：待移动的文档 id */
 const pendingMoveDocId = ref<string>("");
+
+/** 移动文件夹模式下：待移动的文件夹 id */
+const pendingMoveFolderId = ref<string>("");
 
 /** 文件夹选择器确认 */
 async function onFolderPickerConfirm(folderId: string | null) {
@@ -802,6 +797,12 @@ async function onFolderPickerConfirm(folderId: string | null) {
     const result = await store.importDirectory(dir, folderId);
     if (!result) return;
     showImportResultToast(result);
+  } else if (pickerContext === "moveFolder") {
+    // 移动文件夹到目标位置
+    const fid = pendingMoveFolderId.value;
+    pendingMoveFolderId.value = "";
+    if (!fid) return;
+    await store.moveFolder(fid, folderId);
   }
 }
 
@@ -814,6 +815,9 @@ function onFolderPickerCancel() {
   }
   if (pickerContext === "importFolder") {
     pendingImportDir.value = "";
+  }
+  if (pickerContext === "moveFolder") {
+    pendingMoveFolderId.value = "";
   }
 }
 
@@ -976,12 +980,11 @@ function onDragOver(e: DragEvent) {
       <aside id="sidebar" class="sidebar" :class="{ collapsed: sidebarCollapsed }">
         <div class="sidebar-inner">
           <div class="sidebar-head">
-            <span>文档</span>
+            <span class="sidebar-title">文档 <span v-if="hasDocuments" class="sidebar-count">{{ store.documents.length }}</span></span>
             <div class="sidebar-head-right">
-              <span v-if="hasDocuments" class="sidebar-count">{{ store.documents.length }} 篇</span>
               <button
                 v-if="hasDocuments"
-                class="icon-btn sidebar-add-btn"
+                class="icon-btn"
                 :title="selectMode ? '完成多选' : '多选'"
                 :aria-label="selectMode ? '完成多选' : '多选'"
                 @click="selectMode ? exitSelectMode() : enterSelectMode()"
@@ -990,7 +993,7 @@ function onDragOver(e: DragEvent) {
                 <X v-else :size="14" :stroke-width="1.5" />
               </button>
               <button
-                class="icon-btn sidebar-add-btn"
+                class="icon-btn"
                 title="新建文件夹"
                 aria-label="新建文件夹"
                 @click="onNewFolderAtRoot"
@@ -1078,12 +1081,6 @@ function onDragOver(e: DragEvent) {
         <!-- 有文档选中 -->
         <template v-if="currentDoc">
           <div class="preview-body">
-            <!-- 沉浸模式：进入时短暂提示 -->
-            <transition name="fade">
-              <div v-if="presentHintVisible" class="present-hint">
-                按 <kbd>Esc</kbd> 退出演示
-              </div>
-            </transition>
             <p v-if="loadingContent" class="status">加载中…</p>
             <template v-else-if="currentHtml">
               <iframe
@@ -1166,17 +1163,10 @@ function onDragOver(e: DragEvent) {
       @close="contextMenuVisible = false"
     />
 
-    <!-- 文件夹操作错误 toast（右下角，3 秒自动消失） -->
+    <!-- 统一 toast：顶部居中浮层（替换所有右下角 / 分散位置的提示） -->
     <transition name="fade">
-      <div v-if="folderErrorVisible" class="folder-error-toast">
-        {{ store.folderError }}
-      </div>
-    </transition>
-
-    <!-- 信息 toast（导入摘要等，右下角，3.5 秒自动消失） -->
-    <transition name="fade">
-      <div v-if="infoToastVisible" class="info-toast">
-        {{ infoToastMsg }}
+      <div v-if="toastVisible" class="toast" :class="toastType">
+        {{ toastMessage }}
       </div>
     </transition>
 
@@ -1569,24 +1559,26 @@ function onDragOver(e: DragEvent) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 14px 8px;
-  font-size: 11px;
+  padding: 14px 14px 10px;
+}
+.sidebar-title {
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-dim);
 }
 .sidebar-head-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+}
+/* 新建文件夹按钮微调：向右偏移 2px 让图标组与右侧边缘更协调 */
+.sidebar-head-right > .icon-btn:last-child {
+  margin-left: 2px;
 }
 .sidebar-count {
   font-weight: 400;
   color: var(--text-faint);
-}
-/* 新建文件夹按钮：复用 .icon-btn 尺寸（规范 4px 圆角、hover 半透明叠层） */
-.sidebar-add-btn {
-  width: 22px;
-  height: 22px;
+  margin-left: 2px;
 }
 .sidebar-body {
   flex: 1;
@@ -1667,8 +1659,9 @@ function onDragOver(e: DragEvent) {
   display: none;
 }
 /* 沉浸模式：进入时的短暂提示（toast） */
-.present-hint {
-  position: absolute;
+/* 统一 toast：顶部居中浮层，基于 present-hint 设计 */
+.toast {
+  position: fixed;
   top: 16px;
   left: 50%;
   transform: translateX(-50%);
@@ -1679,19 +1672,16 @@ function onDragOver(e: DragEvent) {
     rgba(15, 15, 15, 0.1) 0px 3px 6px, rgba(15, 15, 15, 0.2) 0px 9px 24px;
   font-size: 13px;
   color: var(--text-dim);
-  z-index: 20;
+  z-index: 1100;
   pointer-events: none;
   white-space: nowrap;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.present-hint kbd {
-  display: inline-block;
-  padding: 1px 6px;
-  margin: 0 2px;
-  border-radius: 3px;
-  background: var(--bg-active);
-  font-family: var(--font-sans);
-  font-size: 11px;
-  color: var(--text);
+/* error 类型：暖红色文本 */
+.toast.error {
+  color: var(--danger);
 }
 .preview-iframe {
   position: absolute;
@@ -1844,40 +1834,6 @@ function onDragOver(e: DragEvent) {
 .pop-enter-from {
   transform: scale(0.95);
   opacity: 0;
-}
-
-/* 文件夹操作错误 toast：右下角浮层，3 秒自动消失 */
-.folder-error-toast {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  z-index: 1100;
-  max-width: 320px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--danger);
-  font-size: 13px;
-  line-height: 1.4;
-  box-shadow: rgba(15, 15, 15, 0.05) 0px 0px 0px 1px,
-    rgba(15, 15, 15, 0.1) 0px 3px 6px, rgba(15, 15, 15, 0.2) 0px 9px 24px;
-}
-
-/* 信息 toast（导入摘要等）：右下角，与 error toast 错开高度避免重叠 */
-.info-toast {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  z-index: 1100;
-  max-width: 360px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.4;
-  box-shadow: rgba(15, 15, 15, 0.05) 0px 0px 0px 1px,
-    rgba(15, 15, 15, 0.1) 0px 3px 6px, rgba(15, 15, 15, 0.2) 0px 9px 24px;
 }
 
 /* 导入下拉 */

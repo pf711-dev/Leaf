@@ -80,3 +80,8 @@ export function deleteFolder(id: string): Promise<void> {
 export function moveDocument(docId: string, folderId: string | null): Promise<void> {
   return invoke<void>("move_document", { docId, folderId });
 }
+
+/** 把文件夹移动到另一个父级下。newParentId 为 null 表示移到根目录。 */
+export function moveFolder(folderId: string, newParentId: string | null): Promise<void> {
+  return invoke<void>("move_folder", { folderId, newParentId });
+}
