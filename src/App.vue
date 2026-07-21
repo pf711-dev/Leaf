@@ -121,25 +121,62 @@ async function onConfirmBatchDelete() {
   exitSelectMode();
 }
 
-// 侧边栏展开/收起（默认展开，不持久化）
-const sidebarCollapsed = ref(false);
-// 侧边栏收起时自动退出多选模式（避免选中状态在不可见时残留）
-// 注意：enterSelectMode/exitSelectMode 在下方定义，函数声明可提升，此处可安全引用。
+// 侧边栏宽度（0 = 收起，260 默认，500 最大）
+const SIDEBAR_DEFAULT = 260;
+const SIDEBAR_MAX = 500;
+const SIDEBAR_SNAP = 80; // 低于此自动收起
+const sidebarWidth = ref(SIDEBAR_DEFAULT);
+const sidebarCollapsed = computed(() => sidebarWidth.value <= 0);
+
+// 侧边栏收起时自动退出多选模式
 watch(sidebarCollapsed, (collapsed) => {
   if (collapsed && selectMode.value) exitSelectMode();
 });
 
-// 窗口最大化/全屏状态：为 true 时收起红黄绿避让留白，让切换按钮左移与文档标题对齐
+// 拖拽调整侧边栏宽度
+const isResizing = ref(false);
+let resizeStartX = 0;
+let resizeStartW = 0;
+
+function onResizeStart(e: MouseEvent) {
+  e.preventDefault();
+  isResizing.value = true;
+  resizeStartX = e.clientX;
+  resizeStartW = sidebarWidth.value;
+  document.addEventListener("mousemove", onResizeMove);
+  document.addEventListener("mouseup", onResizeEnd);
+}
+
+function onResizeMove(e: MouseEvent) {
+  if (!isResizing.value) return;
+  const delta = e.clientX - resizeStartX;
+  if (delta <= 0) return; // 只允许向右拖
+  let w = resizeStartW + delta;
+  w = Math.min(SIDEBAR_MAX, w);
+  sidebarWidth.value = w;
+}
+
+function onResizeEnd() {
+  isResizing.value = false;
+  // 微调：离默认值很近时吸附回去
+  if (Math.abs(sidebarWidth.value - SIDEBAR_DEFAULT) < SIDEBAR_SNAP && sidebarWidth.value > 0) {
+    sidebarWidth.value = SIDEBAR_DEFAULT;
+  }
+  document.removeEventListener("mousemove", onResizeMove);
+  document.removeEventListener("mouseup", onResizeEnd);
+}
+
+function toggleSidebar() {
+  sidebarWidth.value = sidebarCollapsed.value ? SIDEBAR_DEFAULT : 0;
+}
+
+// 窗口最大化/全屏状态
 const windowMaximized = ref(false);
 const appWindow = getCurrentWindow();
 
-function toggleSidebar() {
-  sidebarCollapsed.value = !sidebarCollapsed.value;
-}
-
 // 演示（沉浸式）模式
 const presenting = ref(false);
-const sidebarWasCollapsed = ref(false);
+const sidebarWasWidth = ref(SIDEBAR_DEFAULT);
 
 // 统一 toast：顶部居中浮层，替换所有右下角 / 分散位置的提示
 // type: 'info'（默认蓝灰）| 'error'（暖红）
@@ -199,15 +236,15 @@ const bgColors = [
 
 function enterPresent() {
   if (editing.value) exitEdit();
-  sidebarWasCollapsed.value = sidebarCollapsed.value;
-  sidebarCollapsed.value = true;
+  sidebarWasWidth.value = sidebarWidth.value;
+  sidebarWidth.value = 0;
   presenting.value = true;
   showToast("按 Esc 退出演示", "info", 2500);
 }
 
 function exitPresent() {
   presenting.value = false;
-  sidebarCollapsed.value = sidebarWasCollapsed.value;
+  sidebarWidth.value = sidebarWasWidth.value;
 }
 
 // ---------- 编辑模式 ----------
@@ -982,7 +1019,7 @@ function onDragOver(e: DragEvent) {
     <!-- 主内容：左右分栏 -->
     <main class="content">
       <!-- 左侧：文档列表 -->
-      <aside id="sidebar" class="sidebar" :class="{ collapsed: sidebarCollapsed }">
+      <aside id="sidebar" class="sidebar" :class="{ collapsed: sidebarCollapsed, resizing: isResizing }" :style="{ width: sidebarWidth + 'px' }">
         <div class="sidebar-inner">
           <div class="sidebar-head">
             <span class="sidebar-title">文档 <span v-if="hasDocuments" class="sidebar-count">{{ store.documents.length }}</span></span>
@@ -1080,6 +1117,13 @@ function onDragOver(e: DragEvent) {
           </div>
         </div>
       </aside>
+
+      <!-- 侧边栏拖拽手柄 -->
+      <div
+        class="sidebar-handle"
+        :class="{ active: isResizing }"
+        @mousedown="onResizeStart"
+      />
 
       <!-- 右侧：预览 -->
       <section class="preview">
@@ -1511,25 +1555,42 @@ function onDragOver(e: DragEvent) {
 
 /* 左侧列表（Notion 暖米白侧栏） */
 .sidebar {
-  width: 260px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;            /* 收起时裁切内容，配合 .sidebar-inner 固定宽度 */
+  overflow: hidden;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   transition: width 0.25s ease, border-color 0.25s ease;
+}
+/* 拖拽时禁用过渡，跟手丝滑 */
+.sidebar.resizing {
+  transition: none;
 }
 .sidebar.collapsed {
   width: 0;
   border-right-color: transparent;
 }
 .sidebar-inner {
-  width: 260px;                /* 内容保持 260px，外层收缩时被裁切而非被挤压 */
+  min-width: 260px;
   flex: 1;
   display: flex;
   flex-direction: column;
 }
+
+/* 侧边栏拖拽手柄 */
+.sidebar-handle {
+  width: 6px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+.sidebar-handle:hover,
+.sidebar-handle.active {
+  background: var(--border);
+}
+
 /* 通用图标按钮（侧边栏切换、演示等共用） */
 .icon-btn {
   display: flex;

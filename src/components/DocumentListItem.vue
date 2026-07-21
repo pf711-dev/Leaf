@@ -48,8 +48,8 @@ function onClick() {
 <template>
   <div
     class="list-item"
-    :class="{ active: !selectMode && active, selected: selectMode && selected }"
-    :style="indent ? { paddingLeft: 8 + indent * 12 + 'px' } : undefined"
+    :class="{ active: !selectMode && active, selected: selectMode && selected, 'is-nested': indent && indent > 0 }"
+    :style="indent ? { paddingLeft: 8 + indent * 8 + 'px' } : undefined"
     :draggable="!selectMode"
     @click="onClick"
     @contextmenu="onContextMenu"
@@ -115,7 +115,7 @@ function onClick() {
   min-width: 0;
 }
 
-.title {
+.list-item .title {
   font-size: 14px;
   font-weight: 500;
   color: var(--text-dim);
@@ -123,5 +123,9 @@ function onClick() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 文件夹内的文档：文字更淡，与根级文档形成层级区分 */
+.list-item.is-nested .title {
+  color: var(--text-faint);
 }
 </style>

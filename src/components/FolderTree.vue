@@ -147,7 +147,7 @@ function onRenameBlur(node: FolderTreeNode) {
       <div
         class="folder-row"
         :class="{ 'drag-over': dragOverId === node.folder.id }"
-        :style="{ paddingLeft: 8 + level * 12 + 'px' }"
+        :style="{ paddingLeft: 8 + level * 8 + 'px' }"
         @click="onFolderClick(node)"
         @contextmenu="onFolderContextmenu(node, $event)"
         @dblclick="onFolderDblclick(node)"
@@ -255,7 +255,7 @@ function onRenameBlur(node: FolderTreeNode) {
 }
 .folder-name {
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -275,6 +275,13 @@ function onRenameBlur(node: FolderTreeNode) {
   color: var(--text);
   font-family: inherit;
   outline: none;
+}
+
+/* 展开内容：左边线视觉包裹 */
+.folder-content {
+  border-left: 1px solid var(--border);
+  margin-left: 14px;
+  padding-left: 6px;
 }
 
 /* 展开过渡（规范：0.25s ease） */
