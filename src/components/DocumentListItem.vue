@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { Document } from "../types/document";
-import { formatDate, formatSize } from "../utils/format";
 import { Square, CheckSquare } from "@lucide/vue";
 
 const props = defineProps<{
@@ -66,10 +65,7 @@ function onClick() {
       :class="{ checked: selected }"
     />
     <div class="list-item-main">
-      <!-- 名称（默认只显示这一行，保持简洁） -->
       <div class="title">{{ doc.fileName }}</div>
-      <!-- 悬停时滑出的元信息条：大小 · 导入时间 -->
-      <div class="meta">{{ formatSize(doc.fileSize) }}<span class="meta-sep">·</span>{{ formatDate(doc.importedAt) }}</div>
     </div>
   </div>
 </template>
@@ -79,10 +75,11 @@ function onClick() {
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  padding: 5px 8px;          /* 收紧：原 6px → 5px，因默认只一行 */
+  padding: 5px 8px;
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.1s;
+  position: relative;
 }
 .list-item:hover {
   background: var(--bg-hover);
@@ -126,24 +123,5 @@ function onClick() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* 元信息条：默认隐藏，悬停时滑出（不占据空间，避免推动下方项） */
-.meta {
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  font-size: 12px;
-  color: var(--text-faint);
-  white-space: nowrap;
-  transition: max-height 0.15s ease, opacity 0.15s ease;
-}
-.list-item:hover .meta {
-  max-height: 18px;
-  opacity: 1;
-}
-.meta-sep {
-  margin: 0 5px;
-  opacity: 0.6;
 }
 </style>

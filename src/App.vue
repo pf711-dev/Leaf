@@ -16,6 +16,7 @@ import FolderPickerDialog from "./components/FolderPickerDialog.vue";
 import { enableModernWindowStyle } from "@cloudworxx/tauri-plugin-mac-rounded-corners";
 import { PanelLeftOpen, PanelLeftClose, Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, RotateCcw, ChevronDown, Baseline, AArrowUp, AArrowDown, Plus, FileUp, FolderUp, FolderOpen, ListTodo, X } from "@lucide/vue";
 import type { ConflictInfo, Document } from "./types/document";
+import { formatDate, formatSize } from "./utils/format";
 
 const store = useDocumentsStore();
 
@@ -600,6 +601,8 @@ const contextMenuVisible = ref(false);
 const contextMenuX = ref(0);
 const contextMenuY = ref(0);
 const contextMenuItems = ref<MenuItem[]>([]);
+/** 右键菜单底部信息（文档元信息，Notion 风格） */
+const contextMenuFooter = ref("");
 let contextMenuTarget: { type: "doc"; doc: Document } | { type: "folder"; folderId: string } | null = null;
 
 /** 在根目录新建文件夹（侧边栏头部「+」按钮） */
@@ -673,6 +676,7 @@ function onItemContextMenu(doc: Document, e: MouseEvent) {
     { key: "copyPath", label: "复制文件路径" },
     { key: "delete", label: "删除", danger: true },
   ];
+  contextMenuFooter.value = `${formatSize(doc.fileSize)} · ${formatDate(doc.importedAt)}`;
   contextMenuX.value = e.clientX;
   contextMenuY.value = e.clientY;
   contextMenuVisible.value = true;
@@ -682,6 +686,7 @@ function onItemContextMenu(doc: Document, e: MouseEvent) {
 function onFolderContextMenu(folderId: string, e: MouseEvent) {
   e.preventDefault();
   contextMenuTarget = { type: "folder", folderId };
+  contextMenuFooter.value = "";
   const folder = store.folders.find((f) => f.id === folderId);
   const isMaxLevel = (folder?.level ?? 0) >= 3;
   const items: MenuItem[] = [
@@ -1159,6 +1164,7 @@ function onDragOver(e: DragEvent) {
       :x="contextMenuX"
       :y="contextMenuY"
       :items="contextMenuItems"
+      :footer="contextMenuFooter"
       @select="onContextSelect"
       @close="contextMenuVisible = false"
     />

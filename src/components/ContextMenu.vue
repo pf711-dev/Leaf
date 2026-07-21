@@ -15,6 +15,8 @@ const props = defineProps<{
   x: number
   y: number
   items: MenuItem[]
+  /** 菜单底部非点击信息（如文件大小、导入时间，Notion 风格） */
+  footer?: string
 }>();
 
 const emit = defineEmits<{
@@ -47,6 +49,7 @@ function onClick(key: string) {
           >
             {{ item.label }}
           </button>
+          <div v-if="footer" class="menu-footer">{{ footer }}</div>
         </div>
       </transition>
     </div>
@@ -93,6 +96,17 @@ function onClick(key: string) {
 .menu-item-danger:hover {
   color: var(--danger);
   background: var(--bg-hover);
+}
+
+/* 菜单底部信息区（Notion 风格：分隔线 + 非点击信息） */
+.menu-footer {
+  margin-top: 4px;
+  padding: 6px 10px 4px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-faint);
+  user-select: none;
+  cursor: default;
 }
 
 /* 过渡动画（与 ConfirmDialog 一致） */
