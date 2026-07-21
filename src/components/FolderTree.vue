@@ -32,6 +32,8 @@ const props = defineProps<{
   expandedIds: Set<string>
   /** 正在内联重命名的文件夹 id */
   renamingId?: string | null
+  /** 正在内联重命名的文档 id */
+  renamingDocId?: string | null
   /** 是否处于多选模式 */
   selectMode?: boolean
   /** 多选模式下选中的文档 id 集合 */
@@ -49,10 +51,14 @@ const emit = defineEmits<{
   toggle: [folderId: string]
   /** 拖拽文档到文件夹释放 */
   moveDoc: [docId: string, folderId: string]
-  /** 提交重命名（Enter / blur） */
+  /** 提交文件夹重命名（Enter / blur） */
   commitRename: [folderId: string, newName: string]
-  /** 取消重命名（Esc） */
+  /** 取消文件夹重命名（Esc） */
   cancelRename: []
+  /** 提交文档重命名（Enter / blur）。newName 为不含后缀的主名 */
+  commitDocRename: [docId: string, newName: string]
+  /** 取消文档重命名（Esc） */
+  cancelDocRename: []
   /** 多选模式下切换文档选中态 */
   toggleSelect: [docId: string]
 }>();
@@ -211,9 +217,12 @@ function onRenameBlur(node: FolderTreeNode) {
             :indent="level + 1"
             :select-mode="selectMode"
             :selected="selectMode ? selectedIds?.has(doc.id) : false"
+            :renaming="renamingDocId === doc.id"
             @click="emit('selectDoc', doc)"
             @contextmenu="(d, ev) => emit('docContextmenu', d, ev)"
             @toggle="(did: string) => emit('toggleSelect', did)"
+            @commit-rename="(did: string, n: string) => emit('commitDocRename', did, n)"
+            @cancel-rename="emit('cancelDocRename')"
           />
           <!-- 递归子文件夹 -->
           <FolderTree
@@ -222,6 +231,7 @@ function onRenameBlur(node: FolderTreeNode) {
             :active-doc-id="activeDocId"
             :expanded-ids="expandedIds"
             :renaming-id="renamingId"
+            :renaming-doc-id="renamingDocId"
             :select-mode="selectMode"
             :selected-ids="selectedIds"
             @select-doc="(d: Document) => emit('selectDoc', d)"
@@ -231,6 +241,8 @@ function onRenameBlur(node: FolderTreeNode) {
             @move-doc="(did: string, fid: string) => emit('moveDoc', did, fid)"
             @commit-rename="(fid: string, n: string) => emit('commitRename', fid, n)"
             @cancel-rename="emit('cancelRename')"
+            @commit-doc-rename="(did: string, n: string) => emit('commitDocRename', did, n)"
+            @cancel-doc-rename="emit('cancelDocRename')"
             @toggle-select="(did: string) => emit('toggleSelect', did)"
           />
         </div>

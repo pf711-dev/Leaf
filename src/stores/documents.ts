@@ -12,6 +12,7 @@ import {
   listFolders,
   moveDocument as apiMoveDocument,
   moveFolder as apiMoveFolder,
+  renameDocument as apiRenameDocument,
   renameFolder as apiRenameFolder,
 } from "../api/client";
 import type { ConflictResolution } from "../api/client";
@@ -86,9 +87,9 @@ export const useDocumentsStore = defineStore("documents", () => {
     await Promise.all([refreshDocuments(), refreshFolders()]);
   }
 
-  /** 预检导入冲突：返回撞名清单（由组件层决定如何弹窗）。 */
-  async function checkConflicts(paths: string[]): Promise<ConflictInfo[]> {
-    return checkImportConflicts(paths);
+  /** 预检导入冲突：返回目标文件夹内的撞名清单（由组件层决定如何弹窗）。 */
+  async function checkConflicts(paths: string[], folderId?: string | null): Promise<ConflictInfo[]> {
+    return checkImportConflicts(paths, folderId);
   }
 
   /**
@@ -162,6 +163,22 @@ export const useDocumentsStore = defineStore("documents", () => {
     }
   }
 
+  /**
+   * 重命名文档（newName 为不含后缀的主名）。
+   * 后端会同步重命名库内磁盘文件。这里用全量刷新重新拉 documents，
+   * 调用方需在 currentDoc 可能受影响时自行按 id 重新绑定（见 App.vue）。
+   */
+  async function renameDocument(id: string, newName: string): Promise<boolean> {
+    try {
+      await apiRenameDocument(id, newName);
+      await refreshDocuments();
+      return true;
+    } catch (e) {
+      folderError.value = String(e);
+      return false;
+    }
+  }
+
   /** 删除文件夹（递归删除其下所有子文件夹与文档） */
   async function deleteFolder(id: string): Promise<boolean> {
     try {
@@ -174,13 +191,16 @@ export const useDocumentsStore = defineStore("documents", () => {
     }
   }
 
-  /** 把文档移动到指定文件夹（folderId 为 null 表示移到根目录） */
+  /**
+   * 把文档移动到指定文件夹（folderId 为 null 表示移到根目录）。
+   * 镜像化后移动会改变 libraryPath（磁盘文件搬到目标文件夹的子目录），
+   * 后端不返回新 libraryPath，这里用全量刷新保证一致；调用方需在 currentDoc
+   * 可能受影响时自行按 id 重新绑定（见 App.vue）。
+   */
   async function moveDocument(docId: string, folderId: string | null): Promise<boolean> {
     try {
       await apiMoveDocument(docId, folderId);
-      // 局部更新，避免整表刷新
-      const doc = documents.value.find((d) => d.id === docId);
-      if (doc) doc.folderId = folderId;
+      await refreshDocuments();
       return true;
     } catch (e) {
       folderError.value = String(e);
@@ -219,6 +239,7 @@ export const useDocumentsStore = defineStore("documents", () => {
     remove,
     createFolder,
     renameFolder,
+    renameDocument,
     deleteFolder,
     moveDocument,
     moveFolder,

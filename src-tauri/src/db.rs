@@ -140,6 +140,16 @@ impl Database {
         Ok(())
     }
 
+    /// 仅更新文档的显示名（file_name）。磁盘用 id 命名后，重命名不再动 library_path。
+    pub fn update_document_name(&self, id: &str, new_file_name: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE documents SET file_name = ?1 WHERE id = ?2",
+            params![new_file_name, id],
+        )?;
+        Ok(())
+    }
+
     /// 把文档移动到指定文件夹（folder_id 为 None 表示根目录）。
     pub fn update_document_folder(
         &self,
@@ -154,16 +164,34 @@ impl Database {
         Ok(())
     }
 
-    /// 按原始文件名（file_name）查找文档，用于导入去重预检。
-    /// 返回所有匹配的文档（理论上 file_name 不唯一，同名不同内容会有多条）。
-    pub fn find_by_filename(&self, file_name: &str) -> rusqlite::Result<Vec<Document>> {
+    /// 在指定文件夹内按 file_name 查找文档（镜像化后唯一性约束变为「同 folder 内唯一」）。
+    /// folder_id 为 None 表示根目录散落文档。
+    pub fn find_by_filename_in_folder(
+        &self,
+        file_name: &str,
+        folder_id: Option<&str>,
+    ) -> rusqlite::Result<Vec<Document>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, title, file_name, library_path, file_size, summary, imported_at, source_created_at, folder_id
-             FROM documents WHERE file_name = ?1",
+             FROM documents WHERE file_name = ?1 AND folder_id IS ?2",
         )?;
-        let rows = stmt.query_map(params![file_name], row_to_document)?;
+        let rows = stmt.query_map(params![file_name, folder_id], row_to_document)?;
         rows.collect()
+    }
+
+    /// 按 id 查找单条文档（重命名等场景用）。
+    pub fn get_document(&self, id: &str) -> rusqlite::Result<Option<Document>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, title, file_name, library_path, file_size, summary, imported_at, source_created_at, folder_id
+             FROM documents WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], row_to_document)?;
+        match rows.next() {
+            Some(r) => Ok(Some(r?)),
+            None => Ok(None),
+        }
     }
 
     /// 返回位于某个文件夹下的全部文档（folder_id 为 None 表示根目录下散落的文档）。

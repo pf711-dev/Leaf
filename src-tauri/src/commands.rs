@@ -71,6 +71,7 @@ pub fn import_files(
 pub fn check_import_conflicts(
     db: tauri::State<'_, Database>,
     paths: Vec<String>,
+    folder_id: Option<String>,
 ) -> Result<Vec<ConflictInfo>, String> {
     let mut conflicts = Vec::new();
     for path_str in &paths {
@@ -79,8 +80,10 @@ pub fn check_import_conflicts(
             Some(n) => n.to_string_lossy().into_owned(),
             None => continue,
         };
-        // 查库内是否有同 file_name 的文档
-        let existing = db.find_by_filename(&file_name).map_err(|e| e.to_string())?;
+        // 查目标文件夹内是否有同名文档（镜像化后唯一性按 folder 划分）
+        let existing = db
+            .find_by_filename_in_folder(&file_name, folder_id.as_deref())
+            .map_err(|e| e.to_string())?;
         if let Some(first) = existing.into_iter().next() {
             conflicts.push(ConflictInfo {
                 source_path: path_str.clone(),
@@ -136,6 +139,18 @@ pub fn get_document_path(library_path: String) -> Result<String, String> {
     Ok(full.to_string_lossy().into_owned())
 }
 
+/// 前端调用：在 Finder 中定位某文档（open -R）。
+#[tauri::command]
+pub fn reveal_in_finder(library_path: String) -> Result<(), String> {
+    let full = library::resolve_library_path(&library_path).map_err(|e| e.to_string())?;
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(&full)
+        .spawn()
+        .map_err(|e| format!("无法打开 Finder: {}", e))?;
+    Ok(())
+}
+
 /// 导入单个文件的内部逻辑。
 ///
 /// 返回 Err 仅表示「这个文件导入失败」（如文件读取错误），会被上层跳过。
@@ -153,15 +168,15 @@ fn import_single(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "unknown.html".to_string());
 
-    // 去重检查：库内已有同 file_name 的文档
-    let existing = db.find_by_filename(&file_name)?;
+    // 去重检查：同一文件夹内已有同 file_name 的文档（镜像化后唯一性按 folder 划分）
+    let existing = db.find_by_filename_in_folder(&file_name, folder_id)?;
     if !existing.is_empty() {
         match resolution {
             Resolution::Skip => {
                 return Err(format!("跳过：{} 已存在", file_name).into());
             }
             Resolution::Overwrite => {
-                // 覆盖：删除所有同 file_name 的旧文档（文件 + 记录）
+                // 覆盖：只删除同一文件夹下同名的旧文档（文件 + 记录）
                 for old in &existing {
                     let _ = library::delete_library_file(&old.library_path);
                     db.delete(&old.id)?;
@@ -182,9 +197,15 @@ fn import_single(
             .unwrap_or_default()
     });
 
-    // 库内文件名直接用原始文件名（file_name）。
-    // 同名文件已被上方的 find_by_filename 去重拦截，库内不会出现重名，无需额外冲突处理。
-    let dest_name = file_name.clone();
+    // 落库路径：根据 folder_id 链拼出子目录（磁盘目录用 folder.id 命名）。
+    // 同 folder 内的文件名唯一性已由 find_by_filename_in_folder 拦截。
+    let folders = db.list_folders()?;
+    let chain = library::build_folder_chain_path(folder_id, &folders);
+    let dest_name = if chain.is_empty() {
+        file_name.clone()
+    } else {
+        format!("{}/{}", chain, file_name)
+    };
     let (_, size) = library::import_file_named(&source, &dest_name)?;
 
     let now = chrono::Utc::now().timestamp_millis();
@@ -260,7 +281,65 @@ pub fn rename_folder(
     id: String,
     new_name: String,
 ) -> Result<(), String> {
+    let new_name = new_name.trim().to_string();
+    if new_name.is_empty() {
+        return Err("名称不能为空".to_string());
+    }
+    if new_name.chars().any(|c| c == '\0' || c.is_control()) {
+        return Err("名称包含非法字符".to_string());
+    }
     db.rename_folder(&id, &new_name).map_err(|e| e.to_string())
+}
+
+/// 前端调用：重命名文档。
+///
+/// `new_name` 为不含后缀的主名（如 "default"）。后端保留原后缀（.html/.htm），
+/// 仅更新 DB 的 file_name。磁盘文件用 folder.id 命名，重命名不触碰磁盘层。
+/// 唯一性约束：同一文件夹内不允许同名（跨文件夹可同名）。
+#[tauri::command]
+pub fn rename_document(
+    db: tauri::State<'_, Database>,
+    id: String,
+    new_name: String,
+) -> Result<(), String> {
+    let new_name = new_name.trim().to_string();
+    if new_name.is_empty() {
+        return Err("名称不能为空".to_string());
+    }
+    // 非法字符：路径分隔符 / 控制字符。允许的字符范围与主流文件系统一致。
+    if new_name.chars().any(|c| c == '/' || c == '\\' || c == ':' || c == '\0' || c.is_control()) {
+        return Err("名称包含非法字符".to_string());
+    }
+
+    let doc = db
+        .get_document(&id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "文档不存在".to_string())?;
+
+    // 提取原后缀（含点），保留后缀不变
+    let ext = Path::new(&doc.file_name)
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let new_file_name = format!("{}{}", new_name, ext);
+
+    // 名称未变化直接成功
+    if new_file_name == doc.file_name {
+        return Ok(());
+    }
+
+    // 同文件夹内唯一性校验（跨文件夹允许同名）
+    let dup = db
+        .find_by_filename_in_folder(&new_file_name, doc.folder_id.as_deref())
+        .map_err(|e| e.to_string())?;
+    if dup.iter().any(|d| d.id != id) {
+        return Err(format!("已存在同名文件「{}」", new_file_name));
+    }
+
+    // 磁盘用 folder.id 命名，重命名只改 DB 的 file_name，不动 library_path、不碰磁盘
+    db.update_document_name(&id, &new_file_name).map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 /// 前端调用：删除文件夹。
@@ -279,31 +358,76 @@ pub fn delete_folder(db: tauri::State<'_, Database>, id: String) -> Result<(), S
         }
     }
 
-    // 删除每个文件夹下的所有文档（库文件 + DB 记录）
+    // 删除磁盘子目录树（镜像化后整个文件夹树是单个磁盘目录树，一次删完）
+    let folders = db.list_folders().map_err(|e| e.to_string())?;
+    let chain = library::build_folder_chain_path(Some(&id), &folders);
+    let dir_rel = format!("{}/{}", chain, id);
+    let _ = library::delete_library_dir_tree(&dir_rel);
+
+    // 删除 DB 中所有子孙文档记录 + 文件夹记录
     for fid in &all_ids {
         let docs = db.find_documents_in_folder(Some(fid)).map_err(|e| e.to_string())?;
         for doc in &docs {
-            let _ = library::delete_library_file(&doc.library_path);
             db.delete(&doc.id).map_err(|e| e.to_string())?;
         }
-    }
-
-    // 删除所有文件夹记录
-    for fid in &all_ids {
         db.delete_folder_row(fid).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
 /// 前端调用：把文档移动到指定文件夹（folder_id 为 None 表示移到根目录）。
+///
+/// 镜像化后需同步搬运磁盘文件到目标文件夹的子目录，并更新 library_path。
+/// 校验：目标文件夹内不允许同名文档。
 #[tauri::command]
 pub fn move_document(
     db: tauri::State<'_, Database>,
     doc_id: String,
     folder_id: Option<String>,
 ) -> Result<(), String> {
-    db.update_document_folder(&doc_id, folder_id.as_deref())
-        .map_err(|e| e.to_string())
+    let doc = db
+        .get_document(&doc_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "文档不存在".to_string())?;
+
+    // 目标与当前相同，直接成功
+    if doc.folder_id.as_deref() == folder_id.as_deref() {
+        return Ok(());
+    }
+
+    // 目标文件夹内同名校验
+    let dup = db
+        .find_by_filename_in_folder(&doc.file_name, folder_id.as_deref())
+        .map_err(|e| e.to_string())?;
+    if !dup.is_empty() {
+        return Err(format!(
+            "目标文件夹已存在同名文档「{}」",
+            doc.file_name
+        ));
+    }
+
+    // 算出新 library_path
+    let folders = db.list_folders().map_err(|e| e.to_string())?;
+    let new_chain = library::build_folder_chain_path(folder_id.as_deref(), &folders);
+    let new_library_path = if new_chain.is_empty() {
+        doc.file_name.clone()
+    } else {
+        format!("{}/{}", new_chain, doc.file_name)
+    };
+
+    // 搬磁盘文件
+    library::move_library_file(&doc.library_path, &new_library_path).map_err(|e| e.to_string())?;
+
+    // 更新 DB（folder_id + library_path）；失败回滚磁盘
+    if let Err(e) = db
+        .update_document_folder(&doc_id, folder_id.as_deref())
+        .and_then(|_| db.update_library_path(&doc_id, &new_library_path))
+    {
+        let _ = library::move_library_file(&new_library_path, &doc.library_path);
+        return Err(format!("更新数据库失败: {}", e));
+    }
+
+    Ok(())
 }
 
 /// 前端调用：把文件夹移到另一个父级下（folder_id 为 None 表示移到根目录）。
@@ -375,11 +499,30 @@ pub fn move_folder(
         }
     }
 
-    // 5. 更新自身 parent_id 和 level
-    db.update_folder_parent(&folder_id, new_parent_id.as_deref(), new_level)
-        .map_err(|e| e.to_string())?;
+    // 5. 搬磁盘子目录（磁盘目录用 folder.id 命名，子孙 library_path 不用改——路径段全是 id）
+    //    旧路径基于当前 parent 链；新路径基于目标 new_parent_id 链 + folder_id。
+    let (old_rel, new_rel) = {
+        let folders = db.list_folders().map_err(|e| e.to_string())?;
+        let old_chain = library::build_folder_chain_path(Some(&folder_id), &folders);
+        let new_chain = library::build_folder_chain_path(new_parent_id.as_deref(), &folders);
+        (
+            format!("{}/{}", old_chain, folder_id),
+            format!("{}/{}", new_chain, folder_id),
+        )
+    };
+    if let Err(e) = library::move_library_dir(&old_rel, &new_rel) {
+        return Err(format!("移动磁盘目录失败: {}", e));
+    }
 
-    // 6. 递归更新所有子孙的 level
+    // 6. 更新自身 parent_id 和 level（失败回滚磁盘）
+    if let Err(e) =
+        db.update_folder_parent(&folder_id, new_parent_id.as_deref(), new_level)
+    {
+        let _ = library::move_library_dir(&new_rel, &old_rel);
+        return Err(format!("更新数据库失败: {}", e));
+    }
+
+    // 7. 递归更新所有子孙的 level（DB 内部数据，不涉及磁盘）
     for desc_id in &descendants {
         let desc = db.get_folder(desc_id).map_err(|e| e.to_string())?;
         if let Some(desc) = desc {
@@ -594,19 +737,23 @@ pub fn import_directory(
     let mut failed = 0u32;
     let mut first_error = String::new();
 
-    for file in &files {
-        // 库内文件名：加前缀避免与库内已有文件冲突
-        let dest_name = format!("{}__{}", target_folder_id, file.file_name);
+    // 目标文件夹的磁盘子目录路径（用 folder.id 命名）。新文件统一落到该子目录下。
+    let chain = library::build_folder_chain_path(Some(&target_folder_id), &db.list_folders().map_err(|e| e.to_string())?);
 
-        // 同名跳过（仅检查根级；子目录文件已加前缀）
-        if file.dir_segments.is_empty() {
-            if let Ok(existing) = db.find_by_filename(&file.file_name) {
-                if !existing.is_empty() {
-                    skipped += 1;
-                    continue;
-                }
+    for file in &files {
+        // 同名跳过：目标文件夹内已有同名则跳过（镜像化后唯一性按 folder 划分）
+        if let Ok(existing) = db.find_by_filename_in_folder(&file.file_name, Some(&target_folder_id)) {
+            if !existing.is_empty() {
+                skipped += 1;
+                continue;
             }
         }
+
+        let dest_name = if chain.is_empty() {
+            file.file_name.clone()
+        } else {
+            format!("{}/{}", chain, file.file_name)
+        };
 
         match import_file_at(&db, file, &dest_name, Some(&target_folder_id), true) {
             Ok(true) => imported += 1,

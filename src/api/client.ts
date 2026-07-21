@@ -14,9 +14,13 @@ export function importFiles(
   return invoke<Document[]>("import_files", { paths, resolution, folderId });
 }
 
-/** 预检导入冲突：返回待导入路径中与库内已有 file_name 撞名的清单。 */
-export function checkImportConflicts(paths: string[]): Promise<ConflictInfo[]> {
-  return invoke<ConflictInfo[]>("check_import_conflicts", { paths });
+/** 预检导入冲突：返回待导入路径中与目标文件夹内已有 file_name 撞名的清单。
+ *  folderId 指定目标文件夹；省略表示检查根目录。 */
+export function checkImportConflicts(
+  paths: string[],
+  folderId?: string | null,
+): Promise<ConflictInfo[]> {
+  return invoke<ConflictInfo[]>("check_import_conflicts", { paths, folderId });
 }
 
 /** 导入整个文件夹（连同目录结构）。后端递归遍历并重建文件夹层级。 */
@@ -27,6 +31,11 @@ export function importDirectory(rootPath: string, parentFolderId?: string | null
 /** 返回某文档库内副本的绝对路径（复制路径用）。 */
 export function getDocumentPath(libraryPath: string): Promise<string> {
   return invoke<string>("get_document_path", { libraryPath });
+}
+
+/** 在 Finder 中定位某文档。 */
+export function revealInFinder(libraryPath: string): Promise<void> {
+  return invoke<void>("reveal_in_finder", { libraryPath });
 }
 
 /** 列出全部文档，按导入时间倒序。 */
@@ -69,6 +78,11 @@ export function listFolders(): Promise<Folder[]> {
 /** 重命名文件夹。 */
 export function renameFolder(id: string, newName: string): Promise<void> {
   return invoke<void>("rename_folder", { id, newName });
+}
+
+/** 重命名文档（newName 为不含后缀的主名，后端保留原后缀）。 */
+export function renameDocument(id: string, newName: string): Promise<void> {
+  return invoke<void>("rename_document", { id, newName });
 }
 
 /** 删除文件夹（递归删除其下所有子文件夹与文档）。 */

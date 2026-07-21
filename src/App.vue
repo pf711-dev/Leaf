@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useDocumentsStore } from "./stores/documents";
-import { getDocumentPath, readDocumentContent, writeDocumentContent } from "./api/client";
+import { revealInFinder, readDocumentContent, writeDocumentContent } from "./api/client";
 import { extractToc, preparePreviewHtml, type TocItem } from "./utils/html";
 import DocumentListItem from "./components/DocumentListItem.vue";
 import FolderTree from "./components/FolderTree.vue";
@@ -38,6 +37,8 @@ const hasDocuments = computed(() => store.documents.length > 0);
 const expandedFolderIds = ref<Set<string>>(new Set());
 // 正在重命名的文件夹 id（null = 无）
 const renamingFolderId = ref<string | null>(null);
+// 正在重命名的文档 id（null = 无）
+const renamingDocId = ref<string | null>(null);
 
 // 多选模式：批量移动/删除文档。与编辑/演示模式互斥。
 const selectMode = ref(false);
@@ -504,7 +505,7 @@ async function continueImportAfterPicker() {
   const folderId = pendingImportFolderId.value;
   pendingImportFolderId.value = null;
   if (pendingPaths.value.length === 0) return;
-  const conflicts = await store.checkConflicts(pendingPaths.value);
+  const conflicts = await store.checkConflicts(pendingPaths.value, folderId);
   if (conflicts.length > 0) {
     // 记住目标文件夹，等冲突弹窗回调时用
     pendingImportFolderId.value = folderId;
@@ -542,13 +543,12 @@ function onConflictCancel() {
   pendingImportFolderId.value = null;
 }
 
-/** 复制当前文档的库内绝对路径到剪贴板 */
-async function copyPath(doc: Document) {
+/** 在 Finder 中定位当前文档 */
+async function revealDoc(doc: Document) {
   try {
-    const path = await getDocumentPath(doc.libraryPath);
-    await writeText(path);
+    await revealInFinder(doc.libraryPath);
   } catch (e) {
-    console.error("复制路径失败:", e);
+    console.error("在 Finder 中显示失败:", e);
   }
 }
 
@@ -705,9 +705,58 @@ function onCancelRename() {
   renamingFolderId.value = null;
 }
 
+/** 提取文件名主名（去掉最后一个后缀，如 "a.html" → "a"；无后缀原样返回） */
+function fileStem(fileName: string): string {
+  const dot = fileName.lastIndexOf(".");
+  return dot > 0 ? fileName.slice(0, dot) : fileName;
+}
+
+/** 提交文档重命名 */
+async function onCommitDocRename(docId: string, newName: string) {
+  const doc = store.documents.find((d) => d.id === docId);
+  if (!doc) {
+    renamingDocId.value = null;
+    return;
+  }
+  // 同级（同 folderId）同主名校验。库内磁盘文件名全局唯一，跨级重名由后端兜底拦截。
+  const folderId = doc.folderId ?? null;
+  const dup = store.documents.some(
+    (d) =>
+      d.id !== docId &&
+      (d.folderId ?? null) === folderId &&
+      fileStem(d.fileName) === newName,
+  );
+  if (dup) {
+    // 不退出重命名态，提示用户改名后重试
+    showToast(`已存在同名文档「${newName}」，请使用其他名称`, "error", 3000);
+    return;
+  }
+  renamingDocId.value = null;
+  const ok = await store.renameDocument(docId, newName);
+  if (!ok) return;
+  // store.renameDocument 内部 refreshDocuments() 替换了数组，按 id 重新绑定 currentDoc
+  syncCurrentDoc();
+}
+
+/** 取消文档重命名 */
+function onCancelDocRename() {
+  renamingDocId.value = null;
+}
+
+/**
+ * store.refreshDocuments 会替换整个 documents 数组（新对象），
+ * 若 currentDoc 仍指向旧对象（移动/重命名后），按 id 重新绑定，
+ * 保证后续编辑/保存用的 libraryPath 正确。
+ */
+function syncCurrentDoc() {
+  if (!currentDoc.value) return;
+  currentDoc.value = store.documents.find((d) => d.id === currentDoc.value!.id) ?? null;
+}
+
 /** 拖拽文档到文件夹 */
 async function onMoveDoc(docId: string, folderId: string) {
   await store.moveDocument(docId, folderId);
+  syncCurrentDoc();
 }
 
 /** 列表右键：根据目标类型组装菜单 */
@@ -715,8 +764,9 @@ function onItemContextMenu(doc: Document, e: MouseEvent) {
   e.preventDefault();
   contextMenuTarget = { type: "doc", doc };
   contextMenuItems.value = [
+    { key: "rename", label: "重命名" },
     { key: "move", label: "移动到…" },
-    { key: "copyPath", label: "复制文件路径" },
+    { key: "reveal", label: "在 Finder 中显示" },
     { key: "delete", label: "删除", danger: true },
   ];
   contextMenuFooter.value = `${formatSize(doc.fileSize)} · ${formatDate(doc.importedAt)}`;
@@ -757,7 +807,10 @@ function onContextSelect(key: string) {
     const doc = target.doc;
     // 多选模式下：右键的文档若在选中集合里，则整批操作；否则只操作右键的这一篇。
     const batchEligible = selectMode.value && selectedIds.value.has(doc.id);
-    if (key === "move") {
+    if (key === "rename") {
+      // 重命名仅对单篇生效；多选模式下不触发
+      if (!selectMode.value) renamingDocId.value = doc.id;
+    } else if (key === "move") {
       if (batchEligible && selectedIds.value.size > 1) {
         // 批量移动选中项
         pickerContext = "batchMove";
@@ -772,8 +825,8 @@ function onContextSelect(key: string) {
         pendingMoveDocId.value = doc.id;
         folderPickerVisible.value = true;
       }
-    } else if (key === "copyPath") {
-      copyPath(doc);
+    } else if (key === "reveal") {
+      revealDoc(doc);
     } else if (key === "delete") {
       if (batchEligible && selectedIds.value.size > 1) {
         // 批量删除选中项
@@ -816,6 +869,7 @@ async function onFolderPickerConfirm(folderId: string | null) {
     pendingMoveDocId.value = "";
     if (docId) {
       await store.moveDocument(docId, folderId);
+      syncCurrentDoc();
     }
   } else if (pickerContext === "batchMove") {
     // 批量移动：循环 moveDocument，统计成功/失败
@@ -827,6 +881,7 @@ async function onFolderPickerConfirm(folderId: string | null) {
       if (success) ok += 1;
       else fail += 1;
     }
+    syncCurrentDoc();
     if (fail > 0) {
       showInfoToast(`已移动 ${ok} 篇，${fail} 篇失败`);
     } else {
@@ -1066,6 +1121,7 @@ function onDragOver(e: DragEvent) {
                 :active-doc-id="currentDoc?.id"
                 :expanded-ids="expandedFolderIds"
                 :renaming-id="renamingFolderId"
+                :renaming-doc-id="renamingDocId"
                 :select-mode="selectMode"
                 :selected-ids="selectedIds"
                 @select-doc="selectDoc"
@@ -1075,6 +1131,8 @@ function onDragOver(e: DragEvent) {
                 @move-doc="onMoveDoc"
                 @commit-rename="onCommitRename"
                 @cancel-rename="onCancelRename"
+                @commit-doc-rename="onCommitDocRename"
+                @cancel-doc-rename="onCancelDocRename"
                 @toggle-select="toggleSelect"
               />
               <!-- 根目录下散落的文档（folderId 为空） -->
@@ -1085,9 +1143,12 @@ function onDragOver(e: DragEvent) {
                 :active="currentDoc?.id === doc.id"
                 :select-mode="selectMode"
                 :selected="selectMode ? selectedIds.has(doc.id) : false"
+                :renaming="renamingDocId === doc.id"
                 @click="selectDoc(doc)"
                 @contextmenu="(d, ev) => onItemContextMenu(d, ev)"
                 @toggle="toggleSelect"
+                @commit-rename="(did: string, n: string) => onCommitDocRename(did, n)"
+                @cancel-rename="onCancelDocRename"
               />
             </template>
           </div>

@@ -23,10 +23,18 @@ pub fn run() {
             let db_path = library::db_path().expect("无法定位数据库路径");
             let db = Database::open(&db_path).expect("无法打开数据库");
 
-            // 一次性迁移：把历史基于 <title> 的库内文件名改回原始文件名。
+            // 一次性迁移 1：把历史基于 <title> 的库内文件名改回原始文件名。
             // 幂等，迁移完成后所有文档 library_path == file_name，再跑也无副作用。
             if let Ok(docs) = db.list() {
                 library::migrate_filenames(&docs, |id, new_path| {
+                    db.update_library_path(id, new_path).map_err(|e| e.to_string())
+                });
+            }
+
+            // 一次性迁移 2：把扁平库结构搬到镜像化子目录（磁盘目录用 folder.id 命名）。
+            // 幂等，已是目标格式则跳过。
+            if let (Ok(docs), Ok(folders)) = (db.list(), db.list_folders()) {
+                library::migrate_to_folder_layout(&docs, &folders, |id, new_path| {
                     db.update_library_path(id, new_path).map_err(|e| e.to_string())
                 });
             }
@@ -38,6 +46,7 @@ pub fn run() {
             commands::import_files,
             commands::check_import_conflicts,
             commands::get_document_path,
+            commands::reveal_in_finder,
             commands::list_documents,
             commands::read_document_content,
             commands::write_document_content,
@@ -48,6 +57,7 @@ pub fn run() {
             commands::rename_folder,
             commands::delete_folder,
             commands::move_document,
+            commands::rename_document,
             commands::move_folder,
             commands::import_directory,
             plugins::mac_rounded_corners::enable_rounded_corners,
