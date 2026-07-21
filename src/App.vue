@@ -683,11 +683,6 @@ function onToggleFolder(folderId: string) {
   expandedFolderIds.value = next;
 }
 
-/** 进入重命名编辑态 */
-function onStartRename(folderId: string) {
-  renamingFolderId.value = folderId;
-}
-
 /** 提交重命名 */
 async function onCommitRename(folderId: string, newName: string) {
   renamingFolderId.value = null;
@@ -1067,7 +1062,6 @@ function onDragOver(e: DragEvent) {
                 @folder-contextmenu="onFolderContextMenu"
                 @toggle="onToggleFolder"
                 @move-doc="onMoveDoc"
-                @start-rename="onStartRename"
                 @commit-rename="onCommitRename"
                 @cancel-rename="onCancelRename"
                 @toggle-select="toggleSelect"

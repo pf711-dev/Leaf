@@ -3,7 +3,7 @@
  * 文件夹目录树（递归组件）。
  *
  * 渲染规则：每个树节点 = 一个文件夹行 + 其下文档 + 递归的子文件夹。
- * 支持展开收起、右键菜单、拖拽文档进入、双击重命名。
+ * 支持展开收起、右键菜单、拖拽文档进入。
  *
  * 视觉严格遵循 01 设计规范：暖灰半透明叠层、Lucide 图标 14/1.5、
  * 列表项圆角 6px、悬停 0.1s、展开过渡 0.25s ease、缩进每级 12px。
@@ -49,8 +49,6 @@ const emit = defineEmits<{
   toggle: [folderId: string]
   /** 拖拽文档到文件夹释放 */
   moveDoc: [docId: string, folderId: string]
-  /** 进入重命名编辑态（双击触发） */
-  startRename: [folderId: string]
   /** 提交重命名（Enter / blur） */
   commitRename: [folderId: string, newName: string]
   /** 取消重命名（Esc） */
@@ -78,12 +76,6 @@ function onFolderContextmenu(node: FolderTreeNode, e: MouseEvent) {
   e.preventDefault();
   e.stopPropagation();
   emit("folderContextmenu", node.folder.id, e);
-}
-
-/** 双击文件夹名进入重命名编辑态 */
-function onFolderDblclick(node: FolderTreeNode) {
-  renameInput.value = node.folder.name;
-  emit("startRename", node.folder.id);
 }
 
 /** 文档拖到文件夹上 */
@@ -150,7 +142,6 @@ function onRenameBlur(node: FolderTreeNode) {
         :style="{ paddingLeft: 8 + level * 8 + 'px' }"
         @click="onFolderClick(node)"
         @contextmenu="onFolderContextmenu(node, $event)"
-        @dblclick="onFolderDblclick(node)"
         @dragover="onDragover(node, $event)"
         @dragleave="onDragleave(node)"
         @drop="onDrop(node, $event)"
@@ -215,7 +206,6 @@ function onRenameBlur(node: FolderTreeNode) {
             @folder-contextmenu="(fid: string, ev: MouseEvent) => emit('folderContextmenu', fid, ev)"
             @toggle="(fid: string) => emit('toggle', fid)"
             @move-doc="(did: string, fid: string) => emit('moveDoc', did, fid)"
-            @start-rename="(fid: string) => emit('startRename', fid)"
             @commit-rename="(fid: string, n: string) => emit('commitRename', fid, n)"
             @cancel-rename="emit('cancelRename')"
             @toggle-select="(did: string) => emit('toggleSelect', did)"
