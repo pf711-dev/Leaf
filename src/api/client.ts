@@ -20,8 +20,8 @@ export function checkImportConflicts(paths: string[]): Promise<ConflictInfo[]> {
 }
 
 /** 导入整个文件夹（连同目录结构）。后端递归遍历并重建文件夹层级。 */
-export function importDirectory(rootPath: string): Promise<DirectoryImportResult> {
-  return invoke<DirectoryImportResult>("import_directory", { rootPath });
+export function importDirectory(rootPath: string, parentFolderId?: string | null): Promise<DirectoryImportResult> {
+  return invoke<DirectoryImportResult>("import_directory", { rootPath, parentFolderId });
 }
 
 /** 返回某文档库内副本的绝对路径（复制路径用）。 */

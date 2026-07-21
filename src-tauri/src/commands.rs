@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::db::{Database, Document, Folder};
@@ -387,56 +386,6 @@ fn is_html(path: &Path) -> bool {
     }
 }
 
-/// 把相对路径段拍平到最多 3 级。
-/// 超过 3 段的部分直接截断到第 3 段（深层文档挂到第 3 级文件夹）。
-/// 返回：(截断后的段, 是否被拍平)
-fn clamp_segments(segments: Vec<String>) -> (Vec<String>, bool) {
-    const MAX_DEPTH: usize = 3;
-    if segments.len() <= MAX_DEPTH {
-        (segments, false)
-    } else {
-        (segments.into_iter().take(MAX_DEPTH).collect(), true)
-    }
-}
-
-/// 把目录段解析成 folder_id（按需创建文件夹并缓存）。
-/// 缓存 key = (parent_id, name)，已存在就复用，避免重复建同名文件夹。
-fn resolve_folder_id(
-    db: &Database,
-    segments: &[String],
-    cache: &mut HashMap<(Option<String>, String), String>,
-    folder_counter: &mut u32,
-) -> Result<Option<String>, String> {
-    if segments.is_empty() {
-        return Ok(None);
-    }
-    let mut parent_id: Option<String> = None;
-    let mut level: i64 = 1;
-    for seg in segments {
-        let key = (parent_id.clone(), seg.clone());
-        let id = match cache.get(&key) {
-            Some(id) => id.clone(),
-            None => {
-                let id = uuid::Uuid::new_v4().to_string();
-                let folder = Folder {
-                    id: id.clone(),
-                    name: seg.clone(),
-                    parent_id: parent_id.clone(),
-                    created_at: chrono::Utc::now().timestamp_millis(),
-                    level,
-                };
-                db.insert_folder(&folder).map_err(|e| e.to_string())?;
-                cache.insert(key, id.clone());
-                *folder_counter += 1;
-                id
-            }
-        };
-        parent_id = Some(id);
-        level += 1;
-    }
-    Ok(parent_id)
-}
-
 /// 把单个文件导入到指定文件夹。
 ///
 /// `dest_name` 已处理过跨目录同名前缀，`folder_id` 已由调用方解析好。
@@ -497,56 +446,74 @@ fn import_file_at(
     Ok(true)
 }
 
-/// 前端调用：导入整个文件夹（连同目录结构一起导入）。
+/// 前端调用：导入整个文件夹。
 ///
-/// 递归遍历 root 下所有 HTML，按相对路径重建 DB 文件夹层级（最多 3 级，
-/// 超出部分拍平到第 3 级）。根级同名文件跳过，子目录同名文件加前缀避免冲突。
-/// 单个文件失败不中断其余。
+/// 递归遍历 root 下所有 HTML 文件，以源文件夹名作为新文件夹名，
+/// 在用户选定的 parent_folder_id 下创建（为 None 则在根目录下创建），
+/// 所有 HTML 文件统一导入到该文件夹内。同名文件跳过。单个文件失败不中断其余。
 #[tauri::command]
 pub fn import_directory(
     db: tauri::State<'_, Database>,
     root_path: String,
+    parent_folder_id: Option<String>,
 ) -> Result<DirectoryImportResult, String> {
     let root = PathBuf::from(&root_path);
     if !root.is_dir() {
         return Err("所选路径不是文件夹".to_string());
     }
 
+    // 取源文件夹名称作为新建文件夹名
+    let folder_name = root
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "未命名文件夹".to_string());
+
     let files = collect_html_files(&root);
     if files.is_empty() {
         return Err("该文件夹下没有 HTML 文件".to_string());
     }
 
-    // 文件夹缓存：key=(parent_id, name) → folder_id。
-    // 在整个命令级别共享，避免对同一目录重复建文件夹。
-    let mut folder_cache: HashMap<(Option<String>, String), String> = HashMap::new();
-    let mut folder_count: u32 = 0;
+    // 计算新文件夹的 level
+    let level = match &parent_folder_id {
+        None => 1,
+        Some(pid) => {
+            let parent = db
+                .get_folder(pid)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "父文件夹不存在".to_string())?;
+            if parent.level >= MAX_FOLDER_LEVEL {
+                return Err(format!(
+                    "已达最大层级（{} 级），无法继续创建子文件夹",
+                    MAX_FOLDER_LEVEL
+                ));
+            }
+            parent.level + 1
+        }
+    };
+
+    // 创建目标文件夹
+    let target_folder_id = uuid::Uuid::new_v4().to_string();
+    let folder = Folder {
+        id: target_folder_id.clone(),
+        name: folder_name,
+        parent_id: parent_folder_id,
+        created_at: chrono::Utc::now().timestamp_millis(),
+        level,
+    };
+    db.insert_folder(&folder).map_err(|e| e.to_string())?;
+    let folder_count: u32 = 1;
 
     let mut imported = 0u32;
     let mut skipped = 0u32;
-    let mut flattened = 0u32;
     let mut failed = 0u32;
     let mut first_error = String::new();
 
     for file in &files {
-        // 拍平到最多 3 级
-        let (segments, was_flattened) = clamp_segments(file.dir_segments.clone());
-        if was_flattened {
-            flattened += 1;
-        }
+        // 库内文件名：加前缀避免与库内已有文件冲突
+        let dest_name = format!("{}__{}", target_folder_id, file.file_name);
 
-        // 解析 folder_id（按需建文件夹，缓存命中则复用）
-        let folder_id = resolve_folder_id(&db, &segments, &mut folder_cache, &mut folder_count)?;
-
-        // 库内文件名：根目录散落用原始名，子目录加前缀避免跨目录同名物理冲突
-        let dest_name = if segments.is_empty() {
-            file.file_name.clone()
-        } else {
-            format!("{}__{}", segments.join("__"), file.file_name)
-        };
-
-        // 根级散落文件做全局同名去重；子目录文件因已加前缀不会撞
-        if segments.is_empty() {
+        // 同名跳过（仅检查根级；子目录文件已加前缀）
+        if file.dir_segments.is_empty() {
             if let Ok(existing) = db.find_by_filename(&file.file_name) {
                 if !existing.is_empty() {
                     skipped += 1;
@@ -555,7 +522,7 @@ pub fn import_directory(
             }
         }
 
-        match import_file_at(&db, file, &dest_name, folder_id.as_deref(), true) {
+        match import_file_at(&db, file, &dest_name, Some(&target_folder_id), true) {
             Ok(true) => imported += 1,
             Ok(false) => skipped += 1,
             Err(e) => {
@@ -572,7 +539,7 @@ pub fn import_directory(
     Ok(DirectoryImportResult {
         imported_count: imported,
         skipped_count: skipped,
-        flattened_count: flattened,
+        flattened_count: 0,
         folder_count,
         first_error,
         failed_count: failed,

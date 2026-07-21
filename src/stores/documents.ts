@@ -121,10 +121,10 @@ export const useDocumentsStore = defineStore("documents", () => {
    * 导入整个文件夹（连同目录结构）。后端递归遍历并重建文件夹层级。
    * 失败时设置 folderError（右下角 toast），不污染目录树渲染。
    */
-  async function importDirectory(rootPath: string): Promise<DirectoryImportResult | null> {
+  async function importDirectory(rootPath: string, parentFolderId?: string | null): Promise<DirectoryImportResult | null> {
     importing.value += 1;
     try {
-      const result = await apiImportDirectory(rootPath);
+      const result = await apiImportDirectory(rootPath, parentFolderId);
       await refresh();
       return result;
     } catch (e) {

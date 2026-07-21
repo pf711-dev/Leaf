@@ -14,7 +14,7 @@ import ConflictDialog from "./components/ConflictDialog.vue";
 import ContextMenu, { type MenuItem } from "./components/ContextMenu.vue";
 import FolderPickerDialog from "./components/FolderPickerDialog.vue";
 import { enableModernWindowStyle } from "@cloudworxx/tauri-plugin-mac-rounded-corners";
-import { PanelLeftOpen, PanelLeftClose, Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, RotateCcw, ChevronDown, Baseline, AArrowUp, AArrowDown, Plus, FileUp, FolderUp, FolderOpen } from "@lucide/vue";
+import { PanelLeftOpen, PanelLeftClose, Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight, Undo2, Redo2, RotateCcw, ChevronDown, Baseline, AArrowUp, AArrowDown, Plus, FileUp, FolderUp, FolderOpen, ListTodo, X } from "@lucide/vue";
 import type { ConflictInfo, Document } from "./types/document";
 
 const store = useDocumentsStore();
@@ -38,8 +38,95 @@ const expandedFolderIds = ref<Set<string>>(new Set());
 // 正在重命名的文件夹 id（null = 无）
 const renamingFolderId = ref<string | null>(null);
 
+// 多选模式：批量移动/删除文档。与编辑/演示模式互斥。
+const selectMode = ref(false);
+// 选中的文档 id 集合（跨文件夹）。响应式：每次变更需重新赋值 Set。
+const selectedIds = ref<Set<string>>(new Set());
+
+function enterSelectMode() {
+  if (editing.value) exitEdit();
+  if (presenting.value) exitPresent();
+  selectedIds.value = new Set();
+  selectMode.value = true;
+}
+
+function exitSelectMode() {
+  selectMode.value = false;
+  selectedIds.value = new Set();
+}
+
+/** 切换某文档的选中态（多选模式下点击文档项调用） */
+function toggleSelect(docId: string) {
+  const next = new Set(selectedIds.value);
+  if (next.has(docId)) next.delete(docId);
+  else next.add(docId);
+  selectedIds.value = next;
+}
+
+/** 全选所有文档 */
+function selectAll() {
+  selectedIds.value = new Set(store.documents.map((d) => d.id));
+}
+
+/** 取消全选 */
+function deselectAll() {
+  selectedIds.value = new Set();
+}
+
+// -------------------- 批量操作 --------------------
+
+/** 批量移动：弹 FolderPickerDialog 选目标 */
+function onBatchMove() {
+  if (selectedIds.value.size === 0) return;
+  pickerContext = "batchMove";
+  folderPickerTitle.value = `移动 ${selectedIds.value.size} 篇到…`;
+  pickerExcludeDocFolderId.value = null;
+  folderPickerVisible.value = true;
+}
+
+/** 批量删除：弹 ConfirmDialog 二次确认 */
+const batchDeleteVisible = ref(false);
+function onBatchDelete() {
+  if (selectedIds.value.size === 0) return;
+  batchDeleteVisible.value = true;
+}
+
+/** 确认批量删除 */
+async function onConfirmBatchDelete() {
+  batchDeleteVisible.value = false;
+  const ids = Array.from(selectedIds.value);
+  const docs = store.documents.filter((d) => ids.includes(d.id));
+  let ok = 0;
+  let fail = 0;
+  for (const doc of docs) {
+    try {
+      await store.remove(doc.id, doc.libraryPath);
+      ok += 1;
+    } catch {
+      fail += 1;
+    }
+  }
+  // 如果删除的是当前预览的文档，清空预览
+  if (currentDoc.value && ids.includes(currentDoc.value.id)) {
+    currentDoc.value = null;
+    currentHtml.value = "";
+    tocItems.value = [];
+  }
+  if (fail > 0) {
+    showInfoToast(`已删除 ${ok} 篇，${fail} 篇失败`);
+  } else {
+    showInfoToast(`已删除 ${ok} 篇文档`);
+  }
+  exitSelectMode();
+}
+
 // 侧边栏展开/收起（默认展开，不持久化）
 const sidebarCollapsed = ref(false);
+// 侧边栏收起时自动退出多选模式（避免选中状态在不可见时残留）
+// 注意：enterSelectMode/exitSelectMode 在下方定义，函数声明可提升，此处可安全引用。
+watch(sidebarCollapsed, (collapsed) => {
+  if (collapsed && selectMode.value) exitSelectMode();
+});
 
 // 窗口最大化/全屏状态：为 true 时收起红黄绿避让留白，让切换按钮左移与文档标题对齐
 const windowMaximized = ref(false);
@@ -334,18 +421,21 @@ function onPickImportFiles() {
 /** 下拉项：导入文件夹 */
 async function onPickImportFolder() {
   importDropdownOpen.value = false;
-  await pickFolderAndImport();
-}
-
-/** 选择文件夹并导入（连目录结构一起） */
-async function pickFolderAndImport() {
+  
+  // 先选系统文件夹
   const dir = await open({ directory: true, recursive: true });
   if (!dir || typeof dir !== "string") return;
-  const result = await store.importDirectory(dir);
-  if (!result) return;
-  // 组装结果摘要 toast
-  showImportResultToast(result);
+  
+  // 再弹文件夹选择器选目标位置
+  pickerContext = "importFolder";
+  folderPickerTitle.value = "导入到…";
+  pickerExcludeDocFolderId.value = null;
+  pendingImportDir.value = dir;
+  folderPickerVisible.value = true;
 }
+
+/** 上次选中的导入目录（文件夹选择器确认后使用） */
+const pendingImportDir = ref<string>("");
 
 /** 根据导入结果摘要，组装 toast 文案（成功走 info toast，异常走 error toast） */
 function showImportResultToast(r: { importedCount: number; skippedCount: number; flattenedCount: number; folderCount: number; firstError: string; failedCount: number }) {
@@ -513,7 +603,8 @@ watch(newFolderVisible, (v) => {
 const folderPickerVisible = ref(false);
 const folderPickerTitle = ref("选择文件夹");
 /** 'move'（移动文档）| 'import'（导入目标） */
-let pickerContext: "move" | "import" = "move";
+/** 'move'（移动单个文档）| 'batchMove'（批量移动）| 'import'（导入目标） */
+let pickerContext: "move" | "batchMove" | "import" | "importFolder" = "move";
 /** 移动文档模式下：待移动的文档 id（用于 excludeId 防止移到原文件夹） */
 const pickerExcludeDocFolderId = ref<string | null>(null);
 
@@ -630,16 +721,32 @@ function onContextSelect(key: string) {
 
   if (target.type === "doc") {
     const doc = target.doc;
+    // 多选模式下：右键的文档若在选中集合里，则整批操作；否则只操作右键的这一篇。
+    const batchEligible = selectMode.value && selectedIds.value.has(doc.id);
     if (key === "move") {
-      pickerContext = "move";
-      folderPickerTitle.value = "移动到…";
-      pickerExcludeDocFolderId.value = doc.folderId ?? null;
-      pendingMoveDocId.value = doc.id;
-      folderPickerVisible.value = true;
+      if (batchEligible && selectedIds.value.size > 1) {
+        // 批量移动选中项
+        pickerContext = "batchMove";
+        folderPickerTitle.value = `移动 ${selectedIds.value.size} 篇到…`;
+        pickerExcludeDocFolderId.value = null;
+        folderPickerVisible.value = true;
+      } else {
+        // 单篇移动
+        pickerContext = "move";
+        folderPickerTitle.value = "移动到…";
+        pickerExcludeDocFolderId.value = doc.folderId ?? null;
+        pendingMoveDocId.value = doc.id;
+        folderPickerVisible.value = true;
+      }
     } else if (key === "copyPath") {
       copyPath(doc);
     } else if (key === "delete") {
-      removeDoc(doc);
+      if (batchEligible && selectedIds.value.size > 1) {
+        // 批量删除选中项
+        batchDeleteVisible.value = true;
+      } else {
+        removeDoc(doc);
+      }
     }
   } else if (target.type === "folder") {
     const folderId = target.folderId;
@@ -667,10 +774,34 @@ async function onFolderPickerConfirm(folderId: string | null) {
     if (docId) {
       await store.moveDocument(docId, folderId);
     }
+  } else if (pickerContext === "batchMove") {
+    // 批量移动：循环 moveDocument，统计成功/失败
+    const ids = Array.from(selectedIds.value);
+    let ok = 0;
+    let fail = 0;
+    for (const id of ids) {
+      const success = await store.moveDocument(id, folderId);
+      if (success) ok += 1;
+      else fail += 1;
+    }
+    if (fail > 0) {
+      showInfoToast(`已移动 ${ok} 篇，${fail} 篇失败`);
+    } else {
+      showInfoToast(`已移动 ${ok} 篇文档`);
+    }
+    exitSelectMode();
   } else if (pickerContext === "import") {
     // 导入目标选定后：预检冲突 → 导入
     pendingImportFolderId.value = folderId;
     await continueImportAfterPicker();
+  } else if (pickerContext === "importFolder") {
+    // 导入文件夹：选定目标后直接导入（不预检冲突）
+    const dir = pendingImportDir.value;
+    pendingImportDir.value = "";
+    if (!dir) return;
+    const result = await store.importDirectory(dir, folderId);
+    if (!result) return;
+    showImportResultToast(result);
   }
 }
 
@@ -680,6 +811,9 @@ function onFolderPickerCancel() {
   if (pickerContext === "import") {
     // 取消导入目标选择 = 放弃整个导入
     pendingPaths.value = [];
+  }
+  if (pickerContext === "importFolder") {
+    pendingImportDir.value = "";
   }
 }
 
@@ -846,6 +980,16 @@ function onDragOver(e: DragEvent) {
             <div class="sidebar-head-right">
               <span v-if="hasDocuments" class="sidebar-count">{{ store.documents.length }} 篇</span>
               <button
+                v-if="hasDocuments"
+                class="icon-btn sidebar-add-btn"
+                :title="selectMode ? '完成多选' : '多选'"
+                :aria-label="selectMode ? '完成多选' : '多选'"
+                @click="selectMode ? exitSelectMode() : enterSelectMode()"
+              >
+                <ListTodo v-if="!selectMode" :size="14" :stroke-width="1.5" />
+                <X v-else :size="14" :stroke-width="1.5" />
+              </button>
+              <button
                 class="icon-btn sidebar-add-btn"
                 title="新建文件夹"
                 aria-label="新建文件夹"
@@ -871,6 +1015,8 @@ function onDragOver(e: DragEvent) {
                 :active-doc-id="currentDoc?.id"
                 :expanded-ids="expandedFolderIds"
                 :renaming-id="renamingFolderId"
+                :select-mode="selectMode"
+                :selected-ids="selectedIds"
                 @select-doc="selectDoc"
                 @doc-contextmenu="onItemContextMenu"
                 @folder-contextmenu="onFolderContextMenu"
@@ -879,6 +1025,7 @@ function onDragOver(e: DragEvent) {
                 @start-rename="onStartRename"
                 @commit-rename="onCommitRename"
                 @cancel-rename="onCancelRename"
+                @toggle-select="toggleSelect"
               />
               <!-- 根目录下散落的文档（folderId 为空） -->
               <DocumentListItem
@@ -886,10 +1033,42 @@ function onDragOver(e: DragEvent) {
                 :key="doc.id"
                 :doc="doc"
                 :active="currentDoc?.id === doc.id"
+                :select-mode="selectMode"
+                :selected="selectMode ? selectedIds.has(doc.id) : false"
                 @click="selectDoc(doc)"
                 @contextmenu="(d, ev) => onItemContextMenu(d, ev)"
+                @toggle="toggleSelect"
               />
             </template>
+          </div>
+
+          <!-- 多选模式：底部操作栏 -->
+          <div v-if="selectMode" class="select-actionbar">
+            <div class="select-actionbar-left">
+              <span class="select-count">已选 {{ selectedIds.size }} 篇</span>
+              <button
+                class="select-link-btn"
+                @click="selectedIds.size === store.documents.length ? deselectAll() : selectAll()"
+              >
+                {{ selectedIds.size === store.documents.length ? '取消全选' : '全选' }}
+              </button>
+            </div>
+            <div class="select-actionbar-right">
+              <button
+                class="btn btn-primary select-action-btn"
+                :disabled="selectedIds.size === 0"
+                @click="onBatchMove"
+              >
+                移动到…
+              </button>
+              <button
+                class="btn btn-danger select-action-btn"
+                :disabled="selectedIds.size === 0"
+                @click="onBatchDelete"
+              >
+                删除
+              </button>
+            </div>
           </div>
         </div>
       </aside>
@@ -1045,6 +1224,17 @@ function onDragOver(e: DragEvent) {
       @confirm="onConfirmDeleteFolder"
       @cancel="deleteFolderVisible = false; pendingDeleteFolder = null"
     />
+
+    <!-- 批量删除确认 -->
+    <ConfirmDialog
+      :visible="batchDeleteVisible"
+      :title="`删除选中的 ${selectedIds.size} 篇文档？`"
+      message="该操作不可撤销，确认删除这些文档吗？"
+      confirm-text="删除"
+      :danger="true"
+      @confirm="onConfirmBatchDelete"
+      @cancel="batchDeleteVisible = false"
+    />
   </div>
 </template>
 
@@ -1135,9 +1325,19 @@ function onDragOver(e: DragEvent) {
 .btn-ghost {
   border-color: transparent;
 }
+/* 实心危险按钮（批量删除等），复用 --danger 变量 */
+.btn-danger {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+}
 .btn-danger:hover {
-  color: var(--danger);
-  background: var(--bg-hover);
+  background: #b04a44;
+  border-color: #b04a44;
+}
+.btn-danger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* ---------- 编辑工具栏 ---------- */
@@ -1392,6 +1592,50 @@ function onDragOver(e: DragEvent) {
   flex: 1;
   overflow-y: auto;
   padding: 0 8px 8px;
+}
+
+/* 多选模式：底部固定操作栏 */
+.select-actionbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-sidebar);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.select-actionbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.select-count {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.select-link-btn {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent-blue);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.select-link-btn:hover {
+  text-decoration: underline;
+}
+.select-actionbar-right {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.select-action-btn {
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 .status {

@@ -32,6 +32,10 @@ const props = defineProps<{
   expandedIds: Set<string>
   /** 正在内联重命名的文件夹 id */
   renamingId?: string | null
+  /** 是否处于多选模式 */
+  selectMode?: boolean
+  /** 多选模式下选中的文档 id 集合 */
+  selectedIds?: Set<string>
 }>();
 
 const emit = defineEmits<{
@@ -51,6 +55,8 @@ const emit = defineEmits<{
   commitRename: [folderId: string, newName: string]
   /** 取消重命名（Esc） */
   cancelRename: []
+  /** 多选模式下切换文档选中态 */
+  toggleSelect: [docId: string]
 }>();
 
 // 拖拽高亮的文件夹 id
@@ -189,8 +195,11 @@ function onRenameBlur(node: FolderTreeNode) {
             :doc="doc"
             :active="activeDocId === doc.id"
             :indent="level + 1"
+            :select-mode="selectMode"
+            :selected="selectMode ? selectedIds?.has(doc.id) : false"
             @click="emit('selectDoc', doc)"
             @contextmenu="(d, ev) => emit('docContextmenu', d, ev)"
+            @toggle="(did: string) => emit('toggleSelect', did)"
           />
           <!-- 递归子文件夹 -->
           <FolderTree
@@ -199,6 +208,8 @@ function onRenameBlur(node: FolderTreeNode) {
             :active-doc-id="activeDocId"
             :expanded-ids="expandedIds"
             :renaming-id="renamingId"
+            :select-mode="selectMode"
+            :selected-ids="selectedIds"
             @select-doc="(d: Document) => emit('selectDoc', d)"
             @doc-contextmenu="(d: Document, ev: MouseEvent) => emit('docContextmenu', d, ev)"
             @folder-contextmenu="(fid: string, ev: MouseEvent) => emit('folderContextmenu', fid, ev)"
@@ -207,6 +218,7 @@ function onRenameBlur(node: FolderTreeNode) {
             @start-rename="(fid: string) => emit('startRename', fid)"
             @commit-rename="(fid: string, n: string) => emit('commitRename', fid, n)"
             @cancel-rename="emit('cancelRename')"
+            @toggle-select="(did: string) => emit('toggleSelect', did)"
           />
         </div>
       </transition>
