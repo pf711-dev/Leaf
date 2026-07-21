@@ -440,12 +440,15 @@ fn resolve_folder_id(
 /// 把单个文件导入到指定文件夹。
 ///
 /// `dest_name` 已处理过跨目录同名前缀，`folder_id` 已由调用方解析好。
+/// `inline` 为 true 时，把 HTML 引用的本地 CSS/JS/图片内联进内容再写库
+/// （用于目录导入，让原型能完整渲染）；为 false 时直接复制源文件（单文件导入）。
 /// 返回 Ok(true)=已导入，Ok(false)=因根级同名跳过。
 fn import_file_at(
     db: &Database,
     file: &CollectedFile,
     dest_name: &str,
     folder_id: Option<&str>,
+    inline: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     // 读取文件：优先按 UTF-8 读，失败则按字节读并做无损转换（UTF-8 无效字节替换为 U+FFFD）。
     // 这样 GBK/GB2312 等非 UTF-8 编码的 HTML 也能导入（内容可能有乱码，但不至于整篇失败）。
@@ -456,6 +459,7 @@ fn import_file_at(
             String::from_utf8_lossy(&bytes).into_owned()
         }
     };
+    // title/summary 用原文解析，避免内联进来的 base64/CSS/JS 污染摘要文本。
     let parsed = parser::parse(&content);
     let id = uuid::Uuid::new_v4().to_string();
     let title = parsed.title.clone().unwrap_or_else(|| {
@@ -464,7 +468,19 @@ fn import_file_at(
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default()
     });
-    let (_, size) = library::import_file_named(&file.source, dest_name)?;
+
+    // 决定写库内容与写入方式
+    let size = if inline {
+        // 目录导入：内联资源后写入。base_dir 是 HTML 源文件所在目录。
+        let base_dir = file.source.parent().unwrap_or_else(|| Path::new(""));
+        let inlined = crate::inliner::inline_resources(&content, base_dir);
+        library::import_file_content(dest_name, &inlined)?
+    } else {
+        // 单文件导入：直接复制源文件（行为不变）。
+        let (_, n) = library::import_file_named(&file.source, dest_name)?;
+        n
+    };
+
     let now = chrono::Utc::now().timestamp_millis();
     let doc = Document {
         id,
@@ -539,7 +555,7 @@ pub fn import_directory(
             }
         }
 
-        match import_file_at(&db, file, &dest_name, folder_id.as_deref()) {
+        match import_file_at(&db, file, &dest_name, folder_id.as_deref(), true) {
             Ok(true) => imported += 1,
             Ok(false) => skipped += 1,
             Err(e) => {

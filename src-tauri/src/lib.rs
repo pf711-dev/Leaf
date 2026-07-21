@@ -4,6 +4,7 @@
 
 mod commands;
 mod db;
+mod inliner;
 mod library;
 mod parser;
 mod plugins;

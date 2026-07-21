@@ -41,6 +41,18 @@ pub fn import_file_named(source: &Path, dest_name: &str) -> std::io::Result<(Str
     Ok((dest_name.to_string(), size))
 }
 
+/// 把指定内容直接写入库内文件（不复制源文件），用于资源内联后的 HTML。
+///
+/// 与 import_file_named 的区别：参数是内容字符串而非源路径。
+/// 返回写入的字节数。
+pub fn import_file_content(dest_name: &str, content: &str) -> std::io::Result<u64> {
+    let dir = ensure_library_dir()?;
+    let dest = dir.join(dest_name);
+    fs::write(&dest, content)?;
+    let size = fs::metadata(&dest)?.len();
+    Ok(size)
+}
+
 /// 迁移历史库内文件名到原始文件名。
 ///
 /// 早期版本库内文件名基于 HTML <title> 生成，与原始文件名不一致。
