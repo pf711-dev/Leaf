@@ -8,7 +8,7 @@
  * 视觉严格遵循 01 设计规范：暖灰半透明叠层、Lucide 图标 14/1.5、
  * 列表项圆角 6px、悬停 0.1s、展开过渡 0.25s ease、缩进每级 12px。
  */
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { ChevronRight, ChevronDown, Folder, FolderOpen } from "@lucide/vue";
 import type { Document, FolderTreeNode } from "../types/document";
 import DocumentListItem from "./DocumentListItem.vue";
@@ -61,6 +61,29 @@ const emit = defineEmits<{
 const dragOverId = ref<string | null>(null);
 // 重命名输入框的当前值
 const renameInput = ref("");
+
+/**
+ * 进入重命名态时，预填当前文件夹的名字（并依赖 v-focus 指令自动全选）。
+ * 否则 renameInput 会残留上一次输入的值，导致"带入上一个文件夹名"。
+ */
+watch(
+  () => props.renamingId,
+  (id) => {
+    if (!id) return;
+    const node = findNodeById(props.nodes, id);
+    renameInput.value = node?.folder.name ?? "";
+  },
+);
+
+/** 在当前层级（含递归子层级）中按 id 查找节点 */
+function findNodeById(nodes: FolderTreeNode[], id: string): FolderTreeNode | undefined {
+  for (const n of nodes) {
+    if (n.folder.id === id) return n;
+    const hit = findNodeById(n.children, id);
+    if (hit) return hit;
+  }
+  return undefined;
+}
 
 function isExpanded(folderId: string): boolean {
   return props.expandedIds.has(folderId);

@@ -685,6 +685,17 @@ function onToggleFolder(folderId: string) {
 
 /** 提交重命名 */
 async function onCommitRename(folderId: string, newName: string) {
+  // 同级重名校验：同一 parentId 下不允许出现两个同名文件夹。
+  const folder = store.folders.find((f) => f.id === folderId);
+  const parentId = folder?.parentId ?? null;
+  const dup = store.folders.some(
+    (f) => f.id !== folderId && f.parentId === parentId && f.name === newName,
+  );
+  if (dup) {
+    // 不退出重命名态，提示用户改名后重试
+    showToast(`已存在同名文件夹「${newName}」，请使用其他名称`, "error", 3000);
+    return;
+  }
   renamingFolderId.value = null;
   await store.renameFolder(folderId, newName);
 }
