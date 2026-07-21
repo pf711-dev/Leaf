@@ -141,9 +141,12 @@ let resizeStartW = 0;
 
 function onResizeStart(e: MouseEvent) {
   e.preventDefault();
+  e.stopPropagation();
   isResizing.value = true;
   resizeStartX = e.clientX;
   resizeStartW = sidebarWidth.value;
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
   document.addEventListener("mousemove", onResizeMove);
   document.addEventListener("mouseup", onResizeEnd);
 }
@@ -151,20 +154,32 @@ function onResizeStart(e: MouseEvent) {
 function onResizeMove(e: MouseEvent) {
   if (!isResizing.value) return;
   const delta = e.clientX - resizeStartX;
-  if (delta <= 0) return; // 只允许向右拖
+  // 只允许向右拖拽（扩大侧边栏），下限为默认宽度，上限为 SIDEBAR_MAX
   let w = resizeStartW + delta;
-  w = Math.min(SIDEBAR_MAX, w);
+  w = Math.max(SIDEBAR_DEFAULT, Math.min(SIDEBAR_MAX, w));
   sidebarWidth.value = w;
 }
 
 function onResizeEnd() {
-  isResizing.value = false;
-  // 微调：离默认值很近时吸附回去
-  if (Math.abs(sidebarWidth.value - SIDEBAR_DEFAULT) < SIDEBAR_SNAP && sidebarWidth.value > 0) {
-    sidebarWidth.value = SIDEBAR_DEFAULT;
+  if (!isResizing.value) return;
+  // 先决定吸附后的目标宽度
+  let target = sidebarWidth.value;
+  if (target > 0 && Math.abs(target - SIDEBAR_DEFAULT) < SIDEBAR_SNAP) {
+    target = SIDEBAR_DEFAULT;
   }
+  const needsSnap = target !== sidebarWidth.value;
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
   document.removeEventListener("mousemove", onResizeMove);
   document.removeEventListener("mouseup", onResizeEnd);
+  // 先移除 resizing 类恢复 CSS transition，再在下一帧设置目标宽度，
+  // 确保 transition 属性先于 width 变化生效，才能播放平滑动画
+  isResizing.value = false;
+  if (needsSnap) {
+    requestAnimationFrame(() => {
+      sidebarWidth.value = target;
+    });
+  }
 }
 
 function toggleSidebar() {
@@ -1627,21 +1642,26 @@ function onDragOver(e: DragEvent) {
   overflow: hidden;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
-  transition: width 0.25s ease, border-color 0.25s ease;
+  /* contain 限制重排范围，避免拖拽时联动右侧 preview（含 iframe）每帧重排 */
+  contain: layout style;
+  transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s ease;
 }
-/* 拖拽时禁用过渡，跟手丝滑 */
+/* 拖拽时禁用过渡，跟手丝滑；同时提示浏览器准备 GPU 层优化 */
 .sidebar.resizing {
   transition: none;
+  will-change: width;
 }
 .sidebar.collapsed {
   width: 0;
   border-right-color: transparent;
 }
 .sidebar-inner {
-  min-width: 260px;
+  /* 宽度跟随外层 sidebar，由 overflow:hidden 裁切避免内容溢出 */
+  width: 100%;
   flex: 1;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 /* 侧边栏拖拽手柄 */
