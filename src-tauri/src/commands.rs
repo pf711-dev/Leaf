@@ -88,6 +88,12 @@ pub fn read_file_content(rel_path: String) -> Result<String, String> {
     vault::read_file(&rel_path)
 }
 
+/// 读取 HTML 文件并自动内联同目录下的 CSS/JS/图片资源。
+#[tauri::command]
+pub fn read_file_inlined(rel_path: String) -> Result<String, String> {
+    vault::read_file_inlined(&rel_path)
+}
+
 /// 写入文件内容（覆盖原文件）。
 #[tauri::command]
 pub fn write_file_content(rel_path: String, content: String) -> Result<(), String> {

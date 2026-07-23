@@ -32,6 +32,11 @@ export function readFileContent(relPath: string): Promise<string> {
   return invoke<string>("read_file_content", { relPath });
 }
 
+/** 读取 HTML 文件并自动内联同目录下的 CSS/JS/图片资源。 */
+export function readFileInlined(relPath: string): Promise<string> {
+  return invoke<string>("read_file_inlined", { relPath });
+}
+
 /** 写入文件内容（覆盖原文件）。 */
 export function writeFileContent(relPath: string, content: string): Promise<void> {
   return invoke<void>("write_file_content", { relPath, content });

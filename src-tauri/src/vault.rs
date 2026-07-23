@@ -341,6 +341,25 @@ pub fn read_file(rel_path: &str) -> Result<String, String> {
         .map_err(|e| format!("读取文件失败: {}", e))
 }
 
+/// 读取 HTML 文件，并自动内联同目录下的 CSS/JS/图片资源。
+/// 非 HTML 文件直接返回原始内容。
+pub fn read_file_inlined(rel_path: &str) -> Result<String, String> {
+    let root = get_root()?;
+    let path = root.join(rel_path);
+    let html = std::fs::read_to_string(&path)
+        .map_err(|e| format!("读取文件失败: {}", e))?;
+
+    // 只对 HTML 文件做资源内联
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if !matches!(ext.to_lowercase().as_str(), "html" | "htm") {
+        return Ok(html);
+    }
+
+    // HTML 文件所在目录作为 base_dir 解析相对路径
+    let base_dir = path.parent().unwrap_or(&root);
+    Ok(crate::inliner::inline_resources(&html, base_dir))
+}
+
 /// 以 UTF-8 写回文件内容（覆盖原文件）。
 pub fn write_file(rel_path: &str, content: &str) -> Result<(), String> {
     let root = get_root()?;

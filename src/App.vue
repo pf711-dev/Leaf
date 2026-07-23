@@ -6,7 +6,7 @@ import { useDocumentsStore } from "./stores/documents";
 import {
   setVaultRoot,
   getVaultInfo,
-  readFileContent,
+  readFileInlined,
   writeFileContent,
   revealInFinder,
 } from "./api/client";
@@ -551,7 +551,7 @@ async function reloadCurrentFile() {
   currentHtml.value = "";
   activeTocId.value = "";
   try {
-    const raw = await readFileContent(f.relPath);
+    const raw = await readFileInlined(f.relPath);
     tocItems.value = extractToc(raw);
     currentHtml.value = preparePreviewHtml(raw, tocItems.value);
   } finally {

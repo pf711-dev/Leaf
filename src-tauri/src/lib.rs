@@ -22,6 +22,7 @@ macro_rules! app_commands {
             commands::list_vault_files,
             commands::list_vault_dirs,
             commands::read_file_content,
+            commands::read_file_inlined,
             commands::write_file_content,
             commands::create_vault_dir,
             commands::rename_vault_item,
