@@ -28,10 +28,22 @@
 ## 下载安装
 
 ### 1. 下载
-前往 [Releases 页面](https://github.com/pf711-dev/leaf/releases)，下载 `Leaf_x.x.x_aarch64.dmg`（适用于 Apple Silicon Mac）。
+前往 [Releases 页面](https://github.com/pf711-dev/leaf/releases)，根据你的 Mac 芯片类型选择对应的安装包。
+
+| 文件 | 适用芯片 | 说明 |
+|------|---------|------|
+| `Leaf_x.x.x_aarch64.dmg` | Apple Silicon（M1 ~ M4） | 标准安装包（推荐） |
+| `Leaf_x.x.x_x64.dmg` | Intel Mac | 标准安装包（推荐） |
+| `Leaf_aarch64.app.tar.gz` | Apple Silicon | 便携版，解压即用 |
+| `Leaf_x64.app.tar.gz` | Intel Mac | 便携版，解压即用 |
 
 ### 2. 安装
-双击打开 DMG 文件，将 Leaf 拖入 `Applications` 文件夹。
+
+**方式一（.dmg 标准安装，推荐）：**
+双击 DMG 文件，将 Leaf 拖入 `Applications` 文件夹。
+
+**方式二（.app.tar.gz 便携版）：**
+解压后将 `.app` 文件放入 `Applications` 文件夹，或直接运行。
 
 ### 3. 首次打开
 双击 Leaf 图标，系统可能会提示「Leaf 已损坏，无法打开」—— 这是 macOS 对未公证应用的安全限制，**不是应用本身的问题**。
@@ -42,6 +54,7 @@
 - **方式二（终端）**：打开终端，粘贴运行以下命令后重试：
   ```bash
   xattr -dr com.apple.quarantine /Applications/Leaf.app
+  ```
 
 ## 贡献
 
