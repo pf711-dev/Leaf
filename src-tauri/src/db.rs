@@ -87,6 +87,16 @@ impl Database {
             conn.execute("ALTER TABLE documents ADD COLUMN folder_id TEXT", [])?;
         }
 
+        // 仓库配置表（单记录，id 固定为 1）。
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS vault_config (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                root_path TEXT NOT NULL,
+                name TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );",
+        )?;
+
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -286,6 +296,42 @@ impl Database {
         )?;
         let rows = stmt.query_map(params![parent_id], row_to_folder)?;
         rows.collect()
+    }
+
+    // ─── vault_config 操作 ───
+
+    /// 保存或更新仓库配置（root_path + 名称）。
+    pub fn set_vault_config(&self, root_path: &str, name: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "INSERT OR REPLACE INTO vault_config (id, root_path, name, created_at)
+             VALUES (1, ?1, ?2, ?3)",
+            params![root_path, name, now],
+        )?;
+        Ok(())
+    }
+
+    /// 读取仓库配置。返回 (root_path, name)。
+    pub fn get_vault_config(&self) -> rusqlite::Result<Option<(String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT root_path, name FROM vault_config WHERE id = 1",
+        )?;
+        let mut rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        match rows.next() {
+            Some(r) => Ok(Some(r?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 清除仓库配置（目录被删除时调用）。
+    pub fn clear_vault_config(&self) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM vault_config WHERE id = 1", [])?;
+        Ok(())
     }
 }
 

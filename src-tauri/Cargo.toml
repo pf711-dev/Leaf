@@ -1,6 +1,6 @@
 [package]
 name = "leaf"
-version = "0.1.3"
+version = "0.2.0"
 description = "基于 Tauri 的本地 HTML 文档阅读库"
 authors = ["pf711-dev"]
 license = "Apache-2.0"
@@ -34,6 +34,8 @@ chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.21"
 regex = "1"
 once_cell = "1"
+notify = { version = "6", features = ["macos_fsevent"] }
+walkdir = "2"
 
 # macOS 圆角窗口插件依赖
 cocoa = "0.26"

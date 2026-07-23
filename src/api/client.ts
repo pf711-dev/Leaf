@@ -1,101 +1,72 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ConflictInfo, DirectoryImportResult, Document, Folder } from "../types/document";
+import type { VaultDir, VaultFile, VaultInfo } from "../types/document";
 
-/** 冲突解决策略，由用户在弹窗中选择后传入。 */
-export type ConflictResolution = "skip" | "overwrite";
+// ==================== 仓库配置 ====================
 
-/** 导入一批 HTML 文件。paths 是源文件的绝对路径列表。返回成功导入的文档。
- *  folderId 指定目标文件夹；省略表示导入到根目录。 */
-export function importFiles(
-  paths: string[],
-  resolution?: ConflictResolution,
-  folderId?: string | null,
-): Promise<Document[]> {
-  return invoke<Document[]>("import_files", { paths, resolution, folderId });
+/** 设定仓库根目录，触发扫描 + 监听。 */
+export function setVaultRoot(rootPath: string): Promise<void> {
+  return invoke<void>("set_vault_root", { rootPath });
 }
 
-/** 预检导入冲突：返回待导入路径中与目标文件夹内已有 file_name 撞名的清单。
- *  folderId 指定目标文件夹；省略表示检查根目录。 */
-export function checkImportConflicts(
-  paths: string[],
-  folderId?: string | null,
-): Promise<ConflictInfo[]> {
-  return invoke<ConflictInfo[]>("check_import_conflicts", { paths, folderId });
+/** 返回仓库信息。无仓库时返回 null。 */
+export function getVaultInfo(): Promise<VaultInfo | null> {
+  return invoke<VaultInfo | null>("get_vault_info");
 }
 
-/** 导入整个文件夹（连同目录结构）。后端递归遍历并重建文件夹层级。 */
-export function importDirectory(rootPath: string, parentFolderId?: string | null): Promise<DirectoryImportResult> {
-  return invoke<DirectoryImportResult>("import_directory", { rootPath, parentFolderId });
+// ==================== 文件列表 ====================
+
+/** 返回仓库中所有已索引的 HTML 文件。 */
+export function listVaultFiles(): Promise<VaultFile[]> {
+  return invoke<VaultFile[]>("list_vault_files");
 }
 
-/** 返回某文档库内副本的绝对路径（复制路径用）。 */
-export function getDocumentPath(libraryPath: string): Promise<string> {
-  return invoke<string>("get_document_path", { libraryPath });
+/** 返回仓库中所有目录。 */
+export function listVaultDirs(): Promise<VaultDir[]> {
+  return invoke<VaultDir[]>("list_vault_dirs");
 }
 
-/** 在 Finder 中定位某文档。 */
-export function revealInFinder(libraryPath: string): Promise<void> {
-  return invoke<void>("reveal_in_finder", { libraryPath });
+// ==================== 文件读写 ====================
+
+/** 读取文件内容（通过相对路径）。 */
+export function readFileContent(relPath: string): Promise<string> {
+  return invoke<string>("read_file_content", { relPath });
 }
 
-/** 列出全部文档，按导入时间倒序。 */
-export function listDocuments(): Promise<Document[]> {
-  return invoke<Document[]>("list_documents");
+/** 写入文件内容（覆盖原文件）。 */
+export function writeFileContent(relPath: string, content: string): Promise<void> {
+  return invoke<void>("write_file_content", { relPath, content });
 }
 
-/** 读取某个文档的 HTML 原文（阅读器用 srcdoc 渲染）。 */
-export function readDocumentContent(libraryPath: string): Promise<string> {
-  return invoke<string>("read_document_content", { libraryPath });
+// ==================== 文件/文件夹操作 ====================
+
+/** 在仓库中创建目录。parentRel 为 null/空字符串表示在根目录下创建。 */
+export function createVaultDir(parentRel: string | null, name: string): Promise<void> {
+  return invoke<void>("create_vault_dir", { parentRel, name });
 }
 
-/** 写回某个文档的 HTML 原文（编辑模式保存用）。 */
-export function writeDocumentContent(libraryPath: string, content: string): Promise<void> {
-  return invoke<void>("write_document_content", { libraryPath, content });
+/** 重命名文件或目录。 */
+export function renameVaultItem(relPath: string, newName: string, isDir: boolean): Promise<void> {
+  return invoke<void>("rename_vault_item", { relPath, newName, isDir });
 }
 
-/** 删除一个文档（库文件 + 数据库记录）。 */
-export function deleteDocument(id: string, libraryPath: string): Promise<void> {
-  return invoke<void>("delete_document", { id, libraryPath });
+/** 删除文件或目录。isDir=true 时递归删除整个目录。 */
+export function deleteVaultItem(relPath: string, isDir: boolean): Promise<void> {
+  return invoke<void>("delete_vault_item", { relPath, isDir });
 }
 
-/** 返回库目录路径（设置/展示用）。 */
-export function getLibraryDir(): Promise<string> {
-  return invoke<string>("get_library_dir");
+/** 把文件移动到另一个目录下。targetDirRel 为空字符串表示移到根目录。 */
+export function moveVaultFile(relPath: string, targetDirRel: string): Promise<void> {
+  return invoke<void>("move_vault_file", { relPath, targetDirRel });
 }
 
-// -------------------- 文件夹 --------------------
+// ==================== 工具 ====================
 
-/** 新建文件夹。parentId 为 null/undefined 表示在根目录下创建（level 1）。 */
-export function createFolder(name: string, parentId?: string | null): Promise<Folder> {
-  return invoke<Folder>("create_folder", { name, parentId: parentId ?? null });
+/** 在 Finder 中定位文件。 */
+export function revealInFinder(relPath: string): Promise<void> {
+  return invoke<void>("reveal_in_finder", { relPath });
 }
 
-/** 列出全部文件夹（扁平列表，前端组装成树）。 */
-export function listFolders(): Promise<Folder[]> {
-  return invoke<Folder[]>("list_folders");
-}
-
-/** 重命名文件夹。 */
-export function renameFolder(id: string, newName: string): Promise<void> {
-  return invoke<void>("rename_folder", { id, newName });
-}
-
-/** 重命名文档（newName 为不含后缀的主名，后端保留原后缀）。 */
-export function renameDocument(id: string, newName: string): Promise<void> {
-  return invoke<void>("rename_document", { id, newName });
-}
-
-/** 删除文件夹（递归删除其下所有子文件夹与文档）。 */
-export function deleteFolder(id: string): Promise<void> {
-  return invoke<void>("delete_folder", { id });
-}
-
-/** 把文档移动到指定文件夹。folderId 为 null 表示移到根目录。 */
-export function moveDocument(docId: string, folderId: string | null): Promise<void> {
-  return invoke<void>("move_document", { docId, folderId });
-}
-
-/** 把文件夹移动到另一个父级下。newParentId 为 null 表示移到根目录。 */
-export function moveFolder(folderId: string, newParentId: string | null): Promise<void> {
-  return invoke<void>("move_folder", { folderId, newParentId });
+/** 返回某文件的绝对路径。 */
+export function getFileAbsPath(relPath: string): Promise<string> {
+  return invoke<string>("get_file_abs_path", { relPath });
 }

@@ -8,6 +8,7 @@ mod inliner;
 mod library;
 mod parser;
 mod plugins;
+mod vault;
 
 use db::Database;
 use tauri::Manager;
@@ -19,47 +20,30 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
-            // 初始化数据库，作为托管状态注入到所有命令中。
+            // 初始化数据库
             let db_path = library::db_path().expect("无法定位数据库路径");
             let db = Database::open(&db_path).expect("无法打开数据库");
 
-            // 一次性迁移 1：把历史基于 <title> 的库内文件名改回原始文件名。
-            // 幂等，迁移完成后所有文档 library_path == file_name，再跑也无副作用。
-            if let Ok(docs) = db.list() {
-                library::migrate_filenames(&docs, |id, new_path| {
-                    db.update_library_path(id, new_path).map_err(|e| e.to_string())
-                });
-            }
-
-            // 一次性迁移 2：把扁平库结构搬到镜像化子目录（磁盘目录用 folder.id 命名）。
-            // 幂等，已是目标格式则跳过。
-            if let (Ok(docs), Ok(folders)) = (db.list(), db.list_folders()) {
-                library::migrate_to_folder_layout(&docs, &folders, |id, new_path| {
-                    db.update_library_path(id, new_path).map_err(|e| e.to_string())
-                });
-            }
+            // 尝试从 DB 中的仓库配置恢复上次的仓库（扫描 + 监听）。
+            // 忽略错误（可能是新库还未配置），前端会在无 vulut 时展示欢迎页。
+            let _ = commands::init_vault_from_db(&db, app.handle());
 
             app.manage(db);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::import_files,
-            commands::check_import_conflicts,
-            commands::get_document_path,
+            commands::set_vault_root,
+            commands::get_vault_info,
+            commands::list_vault_files,
+            commands::list_vault_dirs,
+            commands::read_file_content,
+            commands::write_file_content,
+            commands::create_vault_dir,
+            commands::rename_vault_item,
+            commands::delete_vault_item,
+            commands::move_vault_file,
             commands::reveal_in_finder,
-            commands::list_documents,
-            commands::read_document_content,
-            commands::write_document_content,
-            commands::delete_document,
-            commands::get_library_dir,
-            commands::create_folder,
-            commands::list_folders,
-            commands::rename_folder,
-            commands::delete_folder,
-            commands::move_document,
-            commands::rename_document,
-            commands::move_folder,
-            commands::import_directory,
+            commands::get_file_abs_path,
             plugins::mac_rounded_corners::enable_rounded_corners,
             plugins::mac_rounded_corners::enable_modern_window_style,
             plugins::mac_rounded_corners::reposition_traffic_lights,

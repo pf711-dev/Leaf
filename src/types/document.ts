@@ -1,3 +1,45 @@
+/** 仓库中的 HTML 文件元数据，由 Rust 侧 vault.rs 返回。 */
+export interface VaultFile {
+  id: string
+  title: string
+  fileName: string
+  /** 从仓库根目录起算的相对路径，如 "slides/slide1.html" */
+  relPath: string
+  /** 磁盘上的绝对路径 */
+  absPath: string
+  fileSize: number
+  summary: string
+  /** 源文件最后修改时间，Unix 毫秒 */
+  lastModified: number
+  /** 文件所在目录相对路径，如 "slides"；根目录则为 "" */
+  dirPath: string
+}
+
+/** 仓库中的一个目录。 */
+export interface VaultDir {
+  /** 从仓库根起算的相对路径，如 "slides/projects"；根目录自身用 "" */
+  relPath: string
+  name: string
+  parentPath: string | null
+  /** 层级深度（根目录下的一级 = 1） */
+  level: number
+}
+
+/** 仓库信息。 */
+export interface VaultInfo {
+  rootPath: string
+  name: string
+}
+
+/** 侧栏目录树节点（前端组装）。 */
+export interface DirTreeNode {
+  dir: VaultDir
+  children: DirTreeNode[]
+  files: VaultFile[]
+}
+
+// ==================== 兼容旧类型（逐步废弃） ====================
+
 /** 文档元数据，对应 Rust 侧 db::Document。
  *  注意：字段名用 camelCase，因为 Rust 侧 serde 会把 snake_case 转成 camelCase
  *  （serde 默认就是 camelCase，除非加了 #[serde(rename_all = ...)]）。 */
