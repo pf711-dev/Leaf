@@ -38,6 +38,7 @@ notify = { version = "6", features = ["macos_fsevent"] }
 walkdir = "2"
 
 # macOS 圆角窗口插件依赖
+[target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2"
 tauri-plugin-clipboard-manager = "2.3.2"

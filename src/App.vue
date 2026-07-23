@@ -391,7 +391,11 @@ onMounted(async () => {
 
   await initVault();
   await startVaultListener();
-  enableModernWindowStyle();
+  try {
+    enableModernWindowStyle();
+  } catch {
+    // 非 macOS 平台忽略
+  }
   refreshMaximized();
 
   const unlistenPromise = appWindow.onResized(onWindowChanged);
