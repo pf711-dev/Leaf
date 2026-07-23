@@ -4,7 +4,6 @@
 
 # Leaf
 
-AI 生成了太多 HTML 报告，但你找不到一个顺手的管理工具？
 **Leaf** 是一个轻量级的桌面应用，以本地文件夹为仓库，管理、浏览、编辑、演示 HTML 文档。
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
