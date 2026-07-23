@@ -876,10 +876,8 @@ function onContextSelect(key: string) {
           </button>
         </template>
       </div>
-      <span class="frame-wrap">
-        <!-- Windows 窗口控制按钮（tauri-plugin-frame 自动注入） -->
-        <div data-tauri-frame-tb></div>
-      </span>
+      <!-- Windows 窗口控制按钮（tauri-plugin-frame 自动注入到该容器） -->
+      <div data-tauri-frame-tb></div>
     </header>
 
     <!-- 主内容 -->
@@ -1176,6 +1174,13 @@ function onContextSelect(key: string) {
   position: relative;
   transition: padding 0.12s cubic-bezier(0.4, 0, 0.2, 1);
 }
+/* 顶栏拖拽区内所有交互元素显式排除，防止 Windows 上被 data-tauri-drag-region 拦截点击 */
+.topbar button,
+.topbar a,
+.topbar input,
+.topbar [role="button"] {
+  -webkit-app-region: no-drag;
+}
 .app.maximized .topbar {
   padding-left: 0px;
 }
@@ -1210,21 +1215,12 @@ function onContextSelect(key: string) {
 }
 
 /* Windows 窗口控制按钮容器 */
-/* 插件会给 [data-tauri-frame-tb] 设置 left:0;right:0; 全宽遮罩 + drag-region，
-   必须用 wrapper 裁剪 + !important 强制限制在右侧按钮区域，否则会拦截顶栏所有点击 */
-.frame-wrap {
+[data-tauri-frame-tb] {
   position: absolute;
   top: 0;
   right: 0;
   height: 44px;
-  overflow: hidden;
-}
-[data-tauri-frame-tb] {
-  position: absolute !important;
-  top: 0 !important;
-  right: 0 !important;
-  left: auto !important;
-  height: 44px !important;
+  z-index: 1;
 }
 
 /* ---------- 按钮 ---------- */
