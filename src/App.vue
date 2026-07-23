@@ -210,6 +210,9 @@ function cancelBatchMove() {
   batchMovePickerVisible.value = false;
 }
 
+// 平台检测：macOS 需要为红黄绿按钮预留空间
+const isMac = ref(false);
+
 // 侧边栏
 const SIDEBAR_DEFAULT = 260;
 const SIDEBAR_MAX = 500;
@@ -473,8 +476,9 @@ onMounted(async () => {
   await startVaultListener();
   try {
     enableModernWindowStyle();
+    isMac.value = true;
   } catch {
-    // 非 macOS 平台忽略
+    isMac.value = false;
   }
   refreshMaximized();
 
@@ -780,7 +784,7 @@ function onContextSelect(key: string) {
   <div
     v-else
     class="app"
-    :class="{ presenting: presenting, maximized: windowMaximized }"
+    :class="{ presenting: presenting, maximized: windowMaximized, 'platform-mac': isMac }"
   >
     <!-- 顶部栏 -->
     <header class="topbar" data-tauri-drag-region>
@@ -872,6 +876,8 @@ function onContextSelect(key: string) {
           </button>
         </template>
       </div>
+      <!-- Windows 窗口控制按钮（tauri-plugin-frame 自动注入） -->
+      <div data-tauri-frame-tb></div>
     </header>
 
     <!-- 主内容 -->
@@ -1165,6 +1171,7 @@ function onContextSelect(key: string) {
   background: var(--bg-sidebar);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  position: relative;
   transition: padding 0.12s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .app.maximized .topbar {
@@ -1177,21 +1184,35 @@ function onContextSelect(key: string) {
   font-size: 13px;
 }
 .topbar-traffic-pad {
-  width: 60px;
+  width: 0;
   flex-shrink: 0;
   height: 100%;
   transition: width 0.12s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.app.maximized .topbar-traffic-pad {
+/* macOS 需要为红黄绿按钮预留空间 */
+.platform-mac .topbar-traffic-pad {
+  width: 60px;
+}
+.platform-mac.maximized .topbar-traffic-pad {
   width: 0;
 }
-.app.maximized .topbar-left .icon-btn {
+.platform-mac.maximized .topbar-left .icon-btn {
   margin-left: -1px;
 }
 .topbar-right {
   display: flex;
   align-items: center;
   gap: 10px;
+  /* 避免被 Windows 窗口控制按钮遮挡 */
+  padding-right: var(--tauri-frame-controls-width, 0px);
+}
+
+/* Windows 窗口控制按钮容器 */
+[data-tauri-frame-tb] {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 44px;
 }
 
 /* ---------- 按钮 ---------- */

@@ -13,6 +13,9 @@ mod vault;
 use db::Database;
 use tauri::Manager;
 
+#[cfg(target_os = "windows")]
+use tauri_plugin_frame::FramePluginBuilder;
+
 /// 所有命令列表（含平台相关命令，由 #[cfg] 控制）。
 macro_rules! app_commands {
     () => {
@@ -43,7 +46,25 @@ macro_rules! app_commands {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.plugin(
+            FramePluginBuilder::new()
+                .titlebar_height(44)
+                .button_width(46)
+                .auto_titlebar(true)
+                .snap_overlay(true)
+                .close_hover_bg("rgba(196,85,77,1)")
+                .button_hover_bg_light("rgba(55,53,47,0.06)")
+                .button_hover_bg_dark("rgba(255,255,255,0.1)")
+                .build(),
+        );
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())

@@ -1,6 +1,6 @@
 [package]
 name = "leaf"
-version = "0.2.1"
+version = "0.2.2"
 description = "基于 Tauri 的本地 HTML 文档阅读库"
 authors = ["pf711-dev"]
 license = "Apache-2.0"
@@ -42,4 +42,8 @@ tauri-plugin-clipboard-manager = "2.3.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2"
+
+# Windows 窗口控制按钮插件
+[target.'cfg(target_os = "windows")'.dependencies]
+tauri-plugin-frame = "1"
 

@@ -127,6 +127,22 @@ html{min-width:1024px;}
       parent.postMessage({type:"html-content",html:dt+html},"*");
     }
   });
+  // 拦截文档中所有 # 锚点链接点击（内置目录等），
+  // 统一用 scrollIntoView 处理，避免 sandbox iframe 中原生 hash
+  // 导航触发文档自带 JS 路由/状态导致页面空白。
+  document.addEventListener("click",function(e){
+    var a=e.target.closest('a[href^="#"]');
+    if(a){
+      var id=a.getAttribute("href").substring(1);
+      if(id){
+        var el=document.getElementById(id);
+        if(el){
+          e.preventDefault();
+          el.scrollIntoView({behavior:"smooth",block:"start"});
+        }
+      }
+    }
+  },true);
   function report(){
     var pos=window.scrollY+100;
     var active="";
