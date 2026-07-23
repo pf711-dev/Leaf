@@ -876,8 +876,10 @@ function onContextSelect(key: string) {
           </button>
         </template>
       </div>
-      <!-- Windows 窗口控制按钮（tauri-plugin-frame 自动注入） -->
-      <div data-tauri-frame-tb></div>
+      <span class="frame-wrap">
+        <!-- Windows 窗口控制按钮（tauri-plugin-frame 自动注入） -->
+        <div data-tauri-frame-tb></div>
+      </span>
     </header>
 
     <!-- 主内容 -->
@@ -1208,11 +1210,21 @@ function onContextSelect(key: string) {
 }
 
 /* Windows 窗口控制按钮容器 */
-[data-tauri-frame-tb] {
+/* 插件会给 [data-tauri-frame-tb] 设置 left:0;right:0; 全宽遮罩 + drag-region，
+   必须用 wrapper 裁剪 + !important 强制限制在右侧按钮区域，否则会拦截顶栏所有点击 */
+.frame-wrap {
   position: absolute;
   top: 0;
   right: 0;
   height: 44px;
+  overflow: hidden;
+}
+[data-tauri-frame-tb] {
+  position: absolute !important;
+  top: 0 !important;
+  right: 0 !important;
+  left: auto !important;
+  height: 44px !important;
 }
 
 /* ---------- 按钮 ---------- */
