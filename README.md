@@ -31,7 +31,7 @@
 
 | 文件 | 平台 | 说明 |
 |------|------|------|
-| `Leaf_x.x.x_aarch64.dmg` | Apple Silicon（M1 ~ M4） | macOS 标准安装包 |
+| `Leaf_x.x.x_aarch64.dmg` | Apple Silicon | macOS 标准安装包 |
 | `Leaf_x.x.x_x64.dmg` | Intel Mac | macOS 标准安装包 |
 | `Leaf_x.x.x_x64_en-US.msi` | Windows 10 / 11 | Windows 安装包 |
 

@@ -133,6 +133,12 @@ pub fn move_vault_file(rel_path: String, target_dir_rel: String) -> Result<(), S
     vault::move_file(&rel_path, &target_dir_rel)
 }
 
+/// 把文件夹移动到另一个目录下。`target_parent_rel` 为空字符串表示移到根目录。
+#[tauri::command]
+pub fn move_vault_dir(dir_rel: String, target_parent_rel: String) -> Result<(), String> {
+    vault::move_dir(&dir_rel, &target_parent_rel)
+}
+
 // ==================== 工具 ====================
 
 /// 在 Finder 中定位文件。

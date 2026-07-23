@@ -156,19 +156,37 @@ pub fn create_dir(parent_rel: Option<&str>, name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 重命名文件或目录。`_is_dir` 暂未使用，保留用于后续区分。
-pub fn rename_item(rel_path: &str, new_name: &str, _is_dir: bool) -> Result<(), String> {
+/// 重命名文件或目录。`is_dir` 为 false 时重命名文件，true 时重命名目录。
+pub fn rename_item(rel_path: &str, new_name: &str, is_dir: bool) -> Result<(), String> {
     let root = get_root()?;
     let src = root.join(rel_path);
     let parent = src.parent().unwrap_or(&root);
-    let dst = parent.join(new_name);
+
+    // 对于文件重命名：如果新名称没有扩展名，自动保留原文件的扩展名
+    // 防止前端只传主名（如 "abc"）导致文件丢失 .html 后缀而无法被索引
+    let final_name = if !is_dir {
+        let src_ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let new_ext = std::path::Path::new(new_name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if new_ext.is_empty() && !src_ext.is_empty() {
+            format!("{}.{}", new_name, src_ext)
+        } else {
+            new_name.to_string()
+        }
+    } else {
+        new_name.to_string()
+    };
+
+    let dst = parent.join(&final_name);
 
     if dst.exists() {
-        return Err(format!("「{}」已存在", new_name));
+        return Err(format!("「{}」已存在", &final_name));
     }
 
     // 防穿越：不允许通过 new_name 中的路径段跨越目录边界
-    if new_name.contains(std::path::MAIN_SEPARATOR) {
+    if final_name.contains(std::path::MAIN_SEPARATOR) {
         return Err("名称中包含非法字符".to_string());
     }
 
@@ -226,6 +244,90 @@ pub fn move_file(rel_path: &str, target_dir_rel: &str) -> Result<(), String> {
 
     std::fs::rename(&src, &dst)
         .map_err(|e| format!("移动文件失败: {}", e))?;
+
+    rebuild_index()?;
+    Ok(())
+}
+
+/// 把文件夹移动到目标目录下。target_parent_rel 为 "" 表示移到根目录。
+/// 会校验 3 级上限、不能移入自身或子孙。
+pub fn move_dir(dir_rel: &str, target_parent_rel: &str) -> Result<(), String> {
+    const MAX_LEVEL: u32 = 3;
+
+    let root = get_root()?;
+    let src = root.join(dir_rel);
+    if !src.is_dir() {
+        return Err("源文件夹不存在".to_string());
+    }
+
+    let dir_name = src
+        .file_name()
+        .ok_or("无效的文件夹路径")?
+        .to_string_lossy()
+        .into_owned();
+
+    // 目标路径
+    let dst = if target_parent_rel.is_empty() {
+        root.join(&dir_name)
+    } else {
+        // 防御：目标目录不能是源目录自身或其子孙
+        let target = root.join(target_parent_rel);
+        if src.starts_with(&target) {
+            return Err("不能将文件夹移到它自己的子文件夹下".to_string());
+        }
+        target.join(&dir_name)
+    };
+
+    if dst.exists() {
+        return Err(format!("目标位置已存在同名文件夹「{}」", dir_name));
+    }
+
+    // 读取当前索引，计算新层级
+    let (_current_files, current_dirs) = scan(&root);
+
+    // 找到被移动的文件夹及其子孙
+    let moved_dir = current_dirs
+        .iter()
+        .find(|d| d.rel_path == dir_rel)
+        .ok_or("文件夹不存在于索引中".to_string())?;
+
+    let old_level = moved_dir.level;
+
+    // 计算新层级
+    let new_level: u32 = if target_parent_rel.is_empty() {
+        1
+    } else {
+        let target_dir = current_dirs
+            .iter()
+            .find(|d| d.rel_path == target_parent_rel)
+            .ok_or("目标文件夹不存在".to_string())?;
+        if target_dir.level >= MAX_LEVEL {
+            return Err(format!("已达最大层级（{} 级），无法放入子文件夹", MAX_LEVEL));
+        }
+        target_dir.level + 1
+    };
+
+    // 收集子孙，校验移动后不越界
+    let level_shift = new_level as i64 - old_level as i64;
+    for d in &current_dirs {
+        if d.rel_path == dir_rel || d.rel_path.starts_with(&format!("{}/", dir_rel)) {
+            let new_lvl = d.level as i64 + level_shift;
+            if new_lvl > MAX_LEVEL as i64 {
+                return Err(format!(
+                    "移动后「{}」的层级将超过 {} 级上限",
+                    d.name, MAX_LEVEL
+                ));
+            }
+        }
+    }
+
+    // 物理移动
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建目标目录失败: {}", e))?;
+    }
+    std::fs::rename(&src, &dst)
+        .map_err(|e| format!("移动文件夹失败: {}", e))?;
 
     rebuild_index()?;
     Ok(())

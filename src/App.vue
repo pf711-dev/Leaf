@@ -17,6 +17,7 @@ import TocPanel from "./components/TocPanel.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
 import ContextMenu, { type MenuItem } from "./components/ContextMenu.vue";
 import VaultSetup from "./components/VaultSetup.vue";
+import FolderPickerDialog from "./components/FolderPickerDialog.vue";
 import { enableModernWindowStyle } from "@cloudworxx/tauri-plugin-mac-rounded-corners";
 import {
   PanelLeftOpen,
@@ -101,6 +102,50 @@ function deselectAll() {
 
 // 批量删除
 const batchDeleteVisible = ref(false);
+
+// 移动文件
+const moveFileVisible = ref(false);
+const pendingMoveFile = ref<VaultFile | null>(null);
+
+async function onMoveFileConfirm(dirRel: string) {
+  const file = pendingMoveFile.value;
+  if (!file) return;
+  moveFileVisible.value = false;
+  const ok = await store.moveFile(file.relPath, dirRel);
+  if (!ok) {
+    // 错误已在 store.folderError 中，watch 会显示 toast
+  } else {
+    showToast(`已移动到目标文件夹`, "info");
+  }
+  syncCurrentFile();
+  pendingMoveFile.value = null;
+}
+
+function cancelMoveFile() {
+  moveFileVisible.value = false;
+  pendingMoveFile.value = null;
+}
+
+// 移动文件夹
+const folderMovePickerVisible = ref(false);
+const pendingMoveFolderRel = ref("");
+
+async function onMoveFolderConfirm(targetDirRel: string) {
+  const dirRel = pendingMoveFolderRel.value;
+  if (!dirRel) return;
+  folderMovePickerVisible.value = false;
+  const ok = await store.moveDir(dirRel, targetDirRel);
+  if (ok) {
+    showToast(`已移动到目标文件夹`, "info");
+  }
+  pendingMoveFolderRel.value = "";
+}
+
+function cancelMoveFolder() {
+  folderMovePickerVisible.value = false;
+  pendingMoveFolderRel.value = "";
+}
+
 function onBatchDelete() {
   if (selectedIds.value.size === 0) return;
   batchDeleteVisible.value = true;
@@ -128,6 +173,41 @@ async function onConfirmBatchDelete() {
     showToast(`已删除 ${ok} 篇文档`, "info");
   }
   exitSelectMode();
+}
+
+// 批量移动
+const batchMovePickerVisible = ref(false);
+
+function onBatchMove() {
+  if (selectedIds.value.size === 0) return;
+  batchMovePickerVisible.value = true;
+}
+
+async function onBatchMoveConfirm(targetDirRel: string) {
+  batchMovePickerVisible.value = false;
+  const ids = Array.from(selectedIds.value);
+  const targetFiles = store.files.filter((f) => ids.includes(f.id));
+  let ok = 0;
+  let fail = 0;
+  for (const f of targetFiles) {
+    const success = await store.moveFile(f.relPath, targetDirRel);
+    if (success) ok += 1;
+    else fail += 1;
+  }
+  // 如果移动的文件中有当前预览的文件，更新引用
+  if (currentFile.value && ids.includes(currentFile.value.id)) {
+    syncCurrentFile();
+  }
+  if (fail > 0) {
+    showToast(`已移动 ${ok} 篇，${fail} 篇失败`, "error");
+  } else {
+    showToast(`已移动 ${ok} 篇文档`, "info");
+  }
+  exitSelectMode();
+}
+
+function cancelBatchMove() {
+  batchMovePickerVisible.value = false;
 }
 
 // 侧边栏
@@ -614,11 +694,13 @@ let contextMenuTarget:
 function onFileContextMenu(file: VaultFile, e: MouseEvent) {
   e.preventDefault();
   contextMenuTarget = { type: "file", file };
-  contextMenuItems.value = [
+  const items: MenuItem[] = [
     { key: "rename", label: "重命名" },
+    { key: "move", label: "移动到..." },
     { key: "reveal", label: "在 Finder 中显示" },
     { key: "delete", label: "删除", danger: true },
   ];
+  contextMenuItems.value = items;
   contextMenuFooter.value = `${formatSize(file.fileSize)} · ${formatDate(file.lastModified)}`;
   contextMenuX.value = e.clientX;
   contextMenuY.value = e.clientY;
@@ -634,6 +716,7 @@ function onFolderContextMenu(dirRel: string, e: MouseEvent) {
   const items: MenuItem[] = [
     { key: "rename", label: "重命名" },
   ];
+  items.push({ key: "moveFolder", label: "移动到…" });
   if (!(level >= 3)) {
     items.push({ key: "newSub", label: "新建子文件夹" });
   }
@@ -654,6 +737,10 @@ function onContextSelect(key: string) {
     const file = target.file;
     if (key === "rename") {
       renamingFileId.value = file.id;
+    } else if (key === "move") {
+      pendingMoveFile.value = file;
+      moveFileVisible.value = true;
+      return; // 让 moveFileVisible 接管，不执行下面的 contextMenuTarget 置空逻辑会导致问题，所以提前 return 保留 target
     } else if (key === "reveal") {
       revealInFinder(file.relPath).catch((e) =>
         console.error("在 Finder 中显示失败:", e),
@@ -665,6 +752,10 @@ function onContextSelect(key: string) {
     const dirRel = target.dirRel;
     if (key === "rename") {
       renamingFolderId.value = dirRel;
+    } else if (key === "moveFolder") {
+      pendingMoveFolderRel.value = dirRel;
+      folderMovePickerVisible.value = true;
+      return;
     } else if (key === "newSub") {
       onNewSubfolder(dirRel);
     } else if (key === "delete") {
@@ -877,6 +968,13 @@ function onContextSelect(key: string) {
             </div>
             <div class="select-actionbar-right">
               <button
+                class="btn btn-primary select-action-btn"
+                :disabled="selectedIds.size === 0"
+                @click="onBatchMove"
+              >
+                移动到…
+              </button>
+              <button
                 class="btn btn-danger select-action-btn"
                 :disabled="selectedIds.size === 0"
                 @click="onBatchDelete"
@@ -990,6 +1088,40 @@ function onContextSelect(key: string) {
         </transition>
       </div>
     </transition>
+
+    <!-- 移动文件到文件夹 -->
+    <FolderPickerDialog
+      :visible="moveFileVisible"
+      :folders="store.dirs"
+      :root-name="vaultName"
+      :default-selected="pendingMoveFile?.dirPath ?? ''"
+      :exclude-dir-rel="pendingMoveFile?.dirPath || null"
+      :title="`移动「${pendingMoveFile?.fileName ?? ''}」到…`"
+      @confirm="onMoveFileConfirm"
+      @cancel="cancelMoveFile"
+    />
+
+    <!-- 移动文件夹到目标位置 -->
+    <FolderPickerDialog
+      :visible="folderMovePickerVisible"
+      :folders="store.dirs"
+      :root-name="vaultName"
+      :exclude-dir-rel="pendingMoveFolderRel || null"
+      :max-target-level="3"
+      :title="`移动「${store.dirs.find(d => d.relPath === pendingMoveFolderRel)?.name ?? '文件夹'}」到…`"
+      @confirm="onMoveFolderConfirm"
+      @cancel="cancelMoveFolder"
+    />
+
+    <!-- 批量移动文件 -->
+    <FolderPickerDialog
+      :visible="batchMovePickerVisible"
+      :folders="store.dirs"
+      :root-name="vaultName"
+      :title="`移动 ${selectedIds.size} 篇到…`"
+      @confirm="onBatchMoveConfirm"
+      @cancel="cancelBatchMove"
+    />
 
     <!-- 删除文件夹确认 -->
     <ConfirmDialog

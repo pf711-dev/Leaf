@@ -7,6 +7,7 @@ import {
   listVaultDirs,
   listVaultFiles,
   moveVaultFile as apiMoveVaultFile,
+  moveVaultDir as apiMoveVaultDir,
   renameVaultItem,
 } from "../api/client";
 
@@ -133,6 +134,18 @@ export const useDocumentsStore = defineStore("documents", () => {
     }
   }
 
+  /** 把文件夹移动到另一个父目录下。targetParentRel 为空字符串表示移到根目录。 */
+  async function moveDir(dirRel: string, targetParentRel: string): Promise<boolean> {
+    try {
+      await apiMoveVaultDir(dirRel, targetParentRel);
+      await refresh();
+      return true;
+    } catch (e) {
+      folderError.value = String(e);
+      return false;
+    }
+  }
+
   return {
     files,
     dirs,
@@ -148,5 +161,6 @@ export const useDocumentsStore = defineStore("documents", () => {
     renameItem,
     removeItem,
     moveFile,
+    moveDir,
   };
 });

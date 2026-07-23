@@ -27,6 +27,7 @@ macro_rules! app_commands {
             commands::rename_vault_item,
             commands::delete_vault_item,
             commands::move_vault_file,
+            commands::move_vault_dir,
             commands::reveal_in_finder,
             commands::get_file_abs_path,
             #[cfg(target_os = "macos")]

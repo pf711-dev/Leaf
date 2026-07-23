@@ -59,6 +59,11 @@ export function moveVaultFile(relPath: string, targetDirRel: string): Promise<vo
   return invoke<void>("move_vault_file", { relPath, targetDirRel });
 }
 
+/** 把文件夹移动到另一个目录下。targetParentRel 为空字符串表示移到根目录。 */
+export function moveVaultDir(dirRel: string, targetParentRel: string): Promise<void> {
+  return invoke<void>("move_vault_dir", { dirRel, targetParentRel });
+}
+
 // ==================== 工具 ====================
 
 /** 在 Finder 中定位文件。 */
