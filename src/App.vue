@@ -789,13 +789,13 @@ function onContextSelect(key: string) {
 </script>
 
 <template>
+  <!-- Windows 窗口控制按钮（tauri-plugin-frame 自动注入），放在 v-if/v-else 链之前避免打断配对 -->
+  <div v-if="!isMac" data-tauri-frame-tb></div>
+
   <!-- 没有仓库 → 欢迎页 -->
   <div v-if="!vaultReady" class="app">
     <VaultSetup @selected="onVaultSelected" />
   </div>
-
-  <!-- Windows 窗口控制按钮（tauri-plugin-frame 自动注入） -->
-  <div v-if="!isMac" data-tauri-frame-tb></div>
 
   <!-- 已有仓库 → 主界面 -->
   <div
