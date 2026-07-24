@@ -54,12 +54,11 @@ html{min-width:1024px;}
 <script id="_preview_nav">
 (function(){
   var ids=${anchorIds};
-  // 自实现字号增减。走 execCommand("insertHTML") 通道而非 Range 的 extractContents/
-  // insertNode —— 后者在 sandbox=allow-scripts（无 allow-same-origin）的 release
-  // WKWebView 下会被拦截，导致字号只影响行高不生效。insertHTML 是 execCommand
-  // 编辑通道，sandbox 允许。同时用 span + !important 覆盖文档原有高优先级 CSS。
-  var STEP=2;                       // 每次增减 2px
+  // 字号增减。macOS WKWebView sandbox 允许 execCommand("insertHTML")，
+  // Windows WebView2 sandbox 则允许 Range API。两个都试，自动 fallback。
+  var STEP=2;
   var MIN_PX=10,MAX_PX=72;
+  var _lastMethod=null; // 记录上次成功的方法，避免每次都试
   function bumpFontSize(dir){
     var sel=window.getSelection();
     if(!sel||sel.rangeCount===0||sel.isCollapsed)return;
@@ -71,28 +70,43 @@ html{min-width:1024px;}
     var nextPx=Math.max(MIN_PX,Math.min(MAX_PX,Math.round(curPx)+dir*STEP));
     if(nextPx===Math.round(curPx))nextPx+=dir;
     nextPx=Math.max(MIN_PX,Math.min(MAX_PX,nextPx));
-    // 取选区内容的 HTML，包进带样式的 span，用 insertHTML 替换选区。
-    // span 上加唯一标记，插入后用 querySelector 定位它并把选区恢复到其内部，
-    // 这样支持连续点击增减。
     var frag=range.cloneContents();
     var tmp=document.createElement("div");
     tmp.appendChild(frag);
     var inner=tmp.innerHTML;
-    var mark="_leaf_fs_"+Date.now()+"_"+Math.random().toString(36).slice(2,7);
-    var html='<span data-leaf-fs="'+mark+'" style="font-size:'+nextPx+'px !important;line-height:1.4 !important;">'+inner+'</span>';
-    try{
+    var span=document.createElement("span");
+    span.style.cssText="font-size:"+nextPx+"px !important;line-height:1.4 !important;";
+    span.innerHTML=inner;
+    // 方法 A: Range API（Windows WebView2 可用）
+    function tryRange(){
+      range.deleteContents();
+      range.insertNode(span);
+      var nr=document.createRange();
+      nr.selectNodeContents(span);
+      sel.removeAllRanges();
+      sel.addRange(nr);
+      return true;
+    }
+    // 方法 B: execCommand（macOS WKWebView 可用）
+    function tryExec(){
+      var mark="_lf"+Date.now();
+      span.setAttribute("data-leaf-fs",mark);
+      var html='<span data-leaf-fs="'+mark+'" style="'+span.style.cssText+'">'+inner+'</span>';
       document.execCommand("insertHTML",false,html);
-      // 定位刚插入的 span，恢复选区到其内部，支持连续点击
-      var span=document.querySelector('[data-leaf-fs="'+mark+'"]');
-      if(span){
+      var el=document.querySelector('[data-leaf-fs="'+mark+'"]');
+      if(el){
         var nr=document.createRange();
-        nr.selectNodeContents(span);
-        var ns=window.getSelection();
-        ns.removeAllRanges();
-        ns.addRange(nr);
-        // 标记用完清除，避免污染保存的 HTML
-        span.removeAttribute("data-leaf-fs");
+        nr.selectNodeContents(el);
+        sel.removeAllRanges();
+        sel.addRange(nr);
+        el.removeAttribute("data-leaf-fs");
       }
+      return true;
+    }
+    try{
+      if(_lastMethod==="range"){tryRange();}
+      else if(_lastMethod==="exec"){tryExec();}
+      else{try{tryRange();_lastMethod="range";}catch(e){tryExec();_lastMethod="exec";}}
     }catch(err){
       try{parent.postMessage({type:"bump-error",msg:String(err&&err.message||err)},"*");}catch(e){}
     }

@@ -526,7 +526,10 @@ function onGlobalMouseDown(e: MouseEvent) {
 function onIframeMessage(e: MessageEvent) {
   const d = e.data;
   if (!d) return;
-  if (d.type === "toc-active") {
+  if (d.type === "bump-error") {
+    // 编辑错误（如字体增减失败），开发阶段可见
+    console.warn("[iframe bump-error]", d.msg);
+  } else if (d.type === "toc-active") {
     activeTocId.value = d.id || "";
   } else if (d.type === "esc") {
     if (editing.value) exitEdit();
@@ -1193,7 +1196,7 @@ function onContextSelect(key: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px 0 8px;
+  padding: 0 0 0 8px;
   height: 44px;
   background: var(--bg-sidebar);
   border-bottom: 1px solid var(--border);
@@ -1230,6 +1233,7 @@ function onContextSelect(key: string) {
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
+  margin-right: 12px;
 }
 
 /* 顶栏拖拽区内所有交互元素显式排除，防止 Windows 上被 data-tauri-drag-region 拦截点击 */
@@ -1639,7 +1643,13 @@ function onContextSelect(key: string) {
   background: #ffffff;
 }
 
+.app.presenting {
+  background: #fff;
+}
 .app.presenting .topbar {
+  display: none;
+}
+.app.presenting .sidebar-handle {
   display: none;
 }
 
