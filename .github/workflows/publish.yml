@@ -12,10 +12,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            args: "--target aarch64-apple-darwin --bundles dmg"
-          - platform: macos-latest
-            args: "--target x86_64-apple-darwin --bundles dmg"
+          # - platform: macos-latest
+          #   args: "--target aarch64-apple-darwin --bundles dmg"
+          # - platform: macos-latest
+          #   args: "--target x86_64-apple-darwin --bundles dmg"
           - platform: windows-latest
             args: "--bundles msi"
 
@@ -31,7 +31,7 @@ jobs:
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ''
 
       - name: install frontend dependencies
         run: npm ci
