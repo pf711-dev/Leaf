@@ -53,7 +53,7 @@ pub fn run() {
     {
         builder = builder.plugin(
             FramePluginBuilder::new()
-                .titlebar_height(44)
+                .titlebar_height(30)
                 .button_width(46)
                 .auto_titlebar(true)
                 .snap_overlay(true)

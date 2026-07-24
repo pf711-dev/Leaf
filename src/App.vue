@@ -278,8 +278,7 @@ function onTopbarMouseDown(e: MouseEvent) {
     target.closest("button") ||
     target.closest("a") ||
     target.closest("input") ||
-    target.closest("select") ||
-    target.closest("[data-tauri-frame-tb]")
+    target.closest("select")
   ) {
     return;
   }
@@ -795,6 +794,9 @@ function onContextSelect(key: string) {
     <VaultSetup @selected="onVaultSelected" />
   </div>
 
+  <!-- Windows 窗口控制按钮（tauri-plugin-frame 自动注入） -->
+  <div v-if="!isMac" data-tauri-frame-tb></div>
+
   <!-- 已有仓库 → 主界面 -->
   <div
     v-else
@@ -893,8 +895,6 @@ function onContextSelect(key: string) {
           </button>
         </template>
       </div>
-      <!-- Windows 窗口控制按钮（tauri-plugin-frame 自动注入到该容器） -->
-      <div data-tauri-frame-tb></div>
     </header>
 
     <!-- 主内容 -->
@@ -1188,7 +1188,6 @@ function onContextSelect(key: string) {
   background: var(--bg-sidebar);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  position: relative;
   transition: padding 0.12s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .app.maximized .topbar {
@@ -1222,15 +1221,6 @@ function onContextSelect(key: string) {
   gap: 10px;
   /* 避免被 Windows 窗口控制按钮遮挡 */
   padding-right: var(--tauri-frame-controls-width, 0px);
-}
-
-/* Windows 窗口控制按钮容器 */
-[data-tauri-frame-tb] {
-  position: absolute;
-  top: 0;
-  right: 0;
-  height: 44px;
-  z-index: 1;
 }
 
 /* 顶栏拖拽区内所有交互元素显式排除，防止 Windows 上被 data-tauri-drag-region 拦截点击 */
