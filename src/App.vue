@@ -789,9 +789,6 @@ function onContextSelect(key: string) {
 </script>
 
 <template>
-  <!-- Windows 窗口控制按钮（tauri-plugin-frame 自动注入），放在 v-if/v-else 链之前避免打断配对 -->
-  <div v-if="!isMac" data-tauri-frame-tb></div>
-
   <!-- 没有仓库 → 欢迎页 -->
   <div v-if="!vaultReady" class="app">
     <VaultSetup @selected="onVaultSelected" />
@@ -894,6 +891,19 @@ function onContextSelect(key: string) {
             演示
           </button>
         </template>
+      </div>
+      <!-- Windows 窗口控制按钮（仅 Windows 显示） -->
+      <div v-if="!isMac" class="win-ctrl">
+        <button class="win-ctrl-btn" title="最小化" @click="appWindow.minimize()">
+          <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" rx="0.5" fill="currentColor"/></svg>
+        </button>
+        <button class="win-ctrl-btn" :title="windowMaximized ? '还原' : '最大化'" @click="appWindow.toggleMaximize()">
+          <svg v-if="windowMaximized" width="10" height="10" viewBox="0 0 10 10"><rect x="1.5" y="0" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="0" y="1.5" width="8" height="8" rx="1.5" fill="var(--bg-sidebar)" stroke="currentColor" stroke-width="1.2"/></svg>
+          <svg v-else width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+        </button>
+        <button class="win-ctrl-btn win-ctrl-close" title="关闭" @click="appWindow.close()">
+          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+        </button>
       </div>
     </header>
 
@@ -1219,14 +1229,40 @@ function onContextSelect(key: string) {
   display: flex;
   align-items: center;
   gap: 10px;
-  /* 避免被 Windows 窗口控制按钮遮挡 */
-  padding-right: var(--tauri-frame-controls-width, 0px);
+  flex-shrink: 0;
 }
 
 /* 顶栏拖拽区内所有交互元素显式排除，防止 Windows 上被 data-tauri-drag-region 拦截点击 */
 .topbar-drag-spacer {
   flex: 1;
   height: 100%;
+}
+
+/* Windows 窗口控制按钮 */
+.win-ctrl {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  flex-shrink: 0;
+}
+.win-ctrl-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 44px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.win-ctrl-btn:hover {
+  background: var(--bg-hover);
+}
+.win-ctrl-close:hover {
+  background: var(--danger);
+  color: #fff;
 }
 
 /* ---------- 按钮 ---------- */

@@ -43,7 +43,3 @@ tauri-plugin-clipboard-manager = "2.3.2"
 cocoa = "0.26"
 objc = "0.2"
 
-# Windows 窗口控制按钮插件
-[target.'cfg(target_os = "windows")'.dependencies]
-tauri-plugin-frame = "1"
-

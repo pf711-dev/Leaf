@@ -87,14 +87,3 @@ body,
 [data-tauri-drag-region] [role="button"] {
   -webkit-app-region: no-drag;
 }
-
-/* Windows 窗口控制按钮容器：fixed 定位在右上角，横向排列 */
-[data-tauri-frame-tb] {
-  position: fixed;
-  top: 0;
-  right: 0;
-  height: 30px;
-  z-index: 100;
-  display: flex;
-  flex-direction: row;
-}
