@@ -271,6 +271,21 @@ function toggleSidebar() {
   sidebarWidth.value = sidebarCollapsed.value ? SIDEBAR_DEFAULT : 0;
 }
 
+// 顶栏拖拽：仅空白区域触发，按钮/控件区域不触发
+function onTopbarMouseDown(e: MouseEvent) {
+  const target = e.target as HTMLElement;
+  if (
+    target.closest("button") ||
+    target.closest("a") ||
+    target.closest("input") ||
+    target.closest("select") ||
+    target.closest("[data-tauri-frame-tb]")
+  ) {
+    return;
+  }
+  appWindow.startDragging();
+}
+
 // 窗口状态
 const windowMaximized = ref(false);
 const appWindow = getCurrentWindow();
@@ -787,9 +802,9 @@ function onContextSelect(key: string) {
     :class="{ presenting: presenting, maximized: windowMaximized, 'platform-mac': isMac }"
   >
     <!-- 顶部栏 -->
-    <header class="topbar">
+    <header class="topbar" @mousedown="onTopbarMouseDown">
       <div class="topbar-left">
-        <div class="topbar-traffic-pad" aria-hidden="true" data-tauri-drag-region></div>
+        <div class="topbar-traffic-pad" aria-hidden="true"></div>
         <button
           class="icon-btn"
           :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
@@ -805,7 +820,7 @@ function onContextSelect(key: string) {
         </button>
       </div>
       <!-- 拖拽区：填充左右按钮之间的空白区域 -->
-      <div class="topbar-drag-spacer" data-tauri-drag-region></div>
+      <div class="topbar-drag-spacer"></div>
       <div class="topbar-right">
         <!-- 编辑模式工具栏 -->
         <template v-if="editing">
