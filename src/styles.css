@@ -78,3 +78,12 @@ body,
   background: rgba(55, 53, 47, 0.24);
   background-clip: padding-box;
 }
+
+/* 自定义标题栏：data-tauri-drag-region 内所有交互元素显式排除拖拽，
+   防止 Windows WebView2 上点击事件被拖拽区域拦截 */
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] a,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] [role="button"] {
+  -webkit-app-region: no-drag;
+}

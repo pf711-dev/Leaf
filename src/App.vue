@@ -475,7 +475,7 @@ onMounted(async () => {
   await initVault();
   await startVaultListener();
   try {
-    enableModernWindowStyle();
+    await enableModernWindowStyle();
     isMac.value = true;
   } catch {
     isMac.value = false;
@@ -1173,13 +1173,6 @@ function onContextSelect(key: string) {
   flex-shrink: 0;
   position: relative;
   transition: padding 0.12s cubic-bezier(0.4, 0, 0.2, 1);
-}
-/* 顶栏拖拽区内所有交互元素显式排除，防止 Windows 上被 data-tauri-drag-region 拦截点击 */
-.topbar button,
-.topbar a,
-.topbar input,
-.topbar [role="button"] {
-  -webkit-app-region: no-drag;
 }
 .app.maximized .topbar {
   padding-left: 0px;
