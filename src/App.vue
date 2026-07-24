@@ -806,7 +806,6 @@ function onContextSelect(key: string) {
       </div>
       <!-- 拖拽区：填充左右按钮之间的空白区域 -->
       <div class="topbar-drag-spacer" data-tauri-drag-region></div>
-      </div>
       <div class="topbar-right">
         <!-- 编辑模式工具栏 -->
         <template v-if="editing">
