@@ -787,7 +787,7 @@ function onContextSelect(key: string) {
     :class="{ presenting: presenting, maximized: windowMaximized, 'platform-mac': isMac }"
   >
     <!-- 顶部栏 -->
-    <header class="topbar" data-tauri-drag-region>
+    <header class="topbar">
       <div class="topbar-left">
         <div class="topbar-traffic-pad" aria-hidden="true" data-tauri-drag-region></div>
         <button
@@ -803,6 +803,9 @@ function onContextSelect(key: string) {
             <PanelLeftOpen v-else key="open" :size="14" :stroke-width="1.5" />
           </Transition>
         </button>
+      </div>
+      <!-- 拖拽区：填充左右按钮之间的空白区域 -->
+      <div class="topbar-drag-spacer" data-tauri-drag-region></div>
       </div>
       <div class="topbar-right">
         <!-- 编辑模式工具栏 -->
@@ -1166,7 +1169,7 @@ function onContextSelect(key: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
+  padding: 0 12px 0 8px;
   height: 44px;
   background: var(--bg-sidebar);
   border-bottom: 1px solid var(--border);
@@ -1214,6 +1217,12 @@ function onContextSelect(key: string) {
   right: 0;
   height: 44px;
   z-index: 1;
+}
+
+/* 顶栏拖拽区内所有交互元素显式排除，防止 Windows 上被 data-tauri-drag-region 拦截点击 */
+.topbar-drag-spacer {
+  flex: 1;
+  height: 100%;
 }
 
 /* ---------- 按钮 ---------- */
