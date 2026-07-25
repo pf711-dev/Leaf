@@ -36,6 +36,14 @@ jobs:
       - name: install frontend dependencies
         run: npm ci
 
+      # npm 包 @cloudworxx/tauri-plugin-mac-rounded-corners 的 postinstall 脚本
+      # 会用它自带的旧版 mod.rs 覆盖本项目已提交的新版（含 set_corner_radius /
+      # set_traffic_lights_visible 等扩展命令）。这里强制还原成 git 版本，
+      # 否则 macOS 构建会因 lib.rs 引用了被覆盖的命令而报 E0433。
+      - name: restore vendored mac plugin sources
+        run: |
+          git checkout -- src-tauri/src/plugins/mac_rounded_corners.rs
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
