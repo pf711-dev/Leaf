@@ -36,6 +36,10 @@ macro_rules! app_commands {
             #[cfg(target_os = "macos")]
             plugins::mac_rounded_corners::enable_modern_window_style,
             #[cfg(target_os = "macos")]
+            plugins::mac_rounded_corners::set_corner_radius,
+            #[cfg(target_os = "macos")]
+            plugins::mac_rounded_corners::set_traffic_lights_visible,
+            #[cfg(target_os = "macos")]
             plugins::mac_rounded_corners::reposition_traffic_lights,
         ]
     };

@@ -9,7 +9,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Platform: macOS | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](#下载安装)
 
-<img src="docs/Leaf.png" alt="Leaf 产品介绍" />
+<img src="docs/Leaf-demo.gif" alt="Leaf 产品介绍" />
 
 </div>
 

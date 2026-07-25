@@ -13,9 +13,43 @@ export interface TocItem {
 export function extractToc(html: string): TocItem[] {
   const doc = new DOMParser().parseFromString(html, "text/html");
 
-  const toc = doc.querySelector(".toc");
+  // 消除可能的前导 BOM / 空白文本节点对 querySelector 的影响
+  // 某些平台（如 Windows WebView2）可能在文档根级别保留 BOM 文本节点，
+  // 导致 <html> 解析结构偏移，间接影响 .toc 的查询命中。
+  const docEl = doc.documentElement;
+
+  // 诊断日志：输出 HTML 片段特征，便于跨平台对比
+  if (typeof window !== "undefined") {
+    console.log("[extractToc] html length:", html.length,
+      "has <html>:", /<html/i.test(html),
+      "has .toc class:", /class=["']?[^"'>]*\btoc\b/i.test(html),
+      "docEl tag:", docEl?.tagName,
+      "docEl children count:", docEl?.children?.length,
+      "body child count:", doc.body?.children?.length);
+  }
+
+  // 优先在 <body> 内查找（某些解析器可能将 .toc 放错了层级）
+  let toc = doc.querySelector(".toc");
+  if (!toc && doc.body) {
+    // fallback：在 body 内查找所有含 toc 类的元素
+    const allTocInBody = doc.body.querySelectorAll('[class]');
+    for (const el of allTocInBody) {
+      const cls = el.getAttribute("class") || "";
+      if (/\btoc\b/i.test(cls)) {
+        toc = el;
+        if (typeof window !== "undefined") {
+          console.log("[extractToc] fallback found .toc via class regex, class=", cls);
+        }
+        break;
+      }
+    }
+  }
+
   if (toc) {
     const links = Array.from(toc.querySelectorAll('a[href^="#"]'));
+    if (typeof window !== "undefined") {
+      console.log("[extractToc] found toc element, links count:", links.length);
+    }
     const items = links
       .map((a) => ({
         id: (a.getAttribute("href") || "").substring(1),
@@ -23,6 +57,10 @@ export function extractToc(html: string): TocItem[] {
       }))
       .filter((item) => item.id && item.text);
     if (items.length > 0) return items;
+  }
+
+  if (typeof window !== "undefined") {
+    console.log("[extractToc] no toc found, returning empty");
   }
   return [];
 }
@@ -40,16 +78,23 @@ export function preparePreviewHtml(html: string, tocItems: TocItem[]): string {
 
   const injected = `<style id="_preview_fix">
 html,body{margin:0;padding:0;}
-html{min-width:1024px;}
+/* min-width:auto：让文档按视口宽度自适应，避免窄窗口下强制出现
+   横向滚动条（横向滚动条会在深色文档底部透出一条白线，并在左下/右下
+   角形成白色矩形）。文档内容用 overflow-x:hidden 兜底防溢出。 */
+html{min-width:auto;overflow-x:hidden;}
 .toc{display:none !important;}
 .layout{grid-template-columns:1fr !important;}
 /* 滚动条：恢复 macOS 原生 Overlay 行为（默认不显示，滚动时浮现、不占宽度）。
-   清除被导入文档可能自定义的 ::-webkit-scrollbar 样式，横向纵向一致。 */
+   清除被导入文档可能自定义的 ::-webkit-scrollbar 样式，横向纵向一致。
+   关键：轨道、横向滚动条、右下角 corner 全部透明，否则在深色文档背景上
+   会透出一条底部白线 + 右下角白色矩形。 */
 *{scrollbar-width:auto;}
-::-webkit-scrollbar{width:auto;height:auto;background:transparent;}
-::-webkit-scrollbar-thumb{background:initial;}
-::-webkit-scrollbar-track{background:initial;}
-::-webkit-scrollbar-corner{background:transparent;}
+::-webkit-scrollbar{width:auto;height:auto;background:transparent !important;}
+::-webkit-scrollbar-thumb{background:initial !important;}
+::-webkit-scrollbar-track{background:initial !important;}
+::-webkit-scrollbar-track-piece{background:transparent !important;}
+::-webkit-scrollbar-corner{background:transparent !important;}
+::-webkit-scrollbar:horizontal{height:auto;background:transparent !important;display:none;}
 </style>
 <script id="_preview_nav">
 (function(){

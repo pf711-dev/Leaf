@@ -2,14 +2,16 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { useDocumentsStore } from "./stores/documents";
 import {
   setVaultRoot,
   getVaultInfo,
   readFileInlined,
   writeFileContent,
-  revealInFinder,
+  getFileAbsPath,
 } from "./api/client";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { extractToc, preparePreviewHtml, type TocItem } from "./utils/html";
 import DocumentListItem from "./components/DocumentListItem.vue";
 import FolderTree from "./components/FolderTree.vue";
@@ -46,6 +48,7 @@ import { formatDate, formatSize } from "./utils/format";
 const store = useDocumentsStore();
 
 // 仓库状态
+const initializing = ref(true);
 const vaultReady = ref(false);
 const vaultRoot = ref("");
 const vaultName = ref("");
@@ -285,6 +288,22 @@ function onTopbarMouseDown(e: MouseEvent) {
   appWindow.startDragging();
 }
 
+// 演示模式拖拽：演示态顶部加一条透明拖拽条，让窗口可移动。
+// 该条本身透明、不拦截点击事件以外的鼠标按下；目录按钮层级更高，
+// 点击/拖拽目录按钮时由按钮接管，不会误触发窗口拖拽。
+function onPresentDragDown(e: MouseEvent) {
+  const target = e.target as HTMLElement;
+  // 目录浮动按钮/面板内部点击不触发拖拽
+  if (
+    target.closest("button") ||
+    target.closest("a") ||
+    target.closest(".toc-panel")
+  ) {
+    return;
+  }
+  appWindow.startDragging();
+}
+
 // 窗口状态
 const windowMaximized = ref(false);
 const appWindow = getCurrentWindow();
@@ -344,17 +363,39 @@ const bgColors = [
   { value: "#D3ADF7", label: "紫" },
 ];
 
+// 窗口圆角半径：正常态 12px（与 enableModernWindowStyle 一致），演示态 0px。
+// 演示时窗口变直角，与直角的 iframe 文档严丝合缝，杜绝圆角处透出底层颜色。
+const RADIUS_NORMAL = 12;
+const RADIUS_PRESENT = 0;
+
+function setCornerRadius(r: number) {
+  invoke("set_corner_radius", { radius: r }).catch(() => {
+    // 非 macOS 或命令不可用时静默忽略
+  });
+}
+
+// 红黄绿窗口按钮：正常态显示，演示态隐藏，避免遮挡文档内容。
+function setTrafficLightsVisible(v: boolean) {
+  invoke("set_traffic_lights_visible", { visible: v }).catch(() => {
+    // 非 macOS 或命令不可用时静默忽略
+  });
+}
+
 function enterPresent() {
   if (editing.value) exitEdit();
   sidebarWasWidth.value = sidebarWidth.value;
   sidebarWidth.value = 0;
   presenting.value = true;
+  setCornerRadius(RADIUS_PRESENT);
+  setTrafficLightsVisible(false);
   showToast("按 Esc 退出演示", "info", 2500);
 }
 
 function exitPresent() {
   presenting.value = false;
   sidebarWidth.value = sidebarWasWidth.value;
+  setCornerRadius(RADIUS_NORMAL);
+  setTrafficLightsVisible(true);
 }
 
 function enterEdit() {
@@ -451,6 +492,8 @@ async function initVault() {
     }
   } catch {
     // 首次使用，留在欢迎页
+  } finally {
+    initializing.value = false;
   }
 }
 
@@ -718,7 +761,7 @@ function onFileContextMenu(file: VaultFile, e: MouseEvent) {
   const items: MenuItem[] = [
     { key: "rename", label: "重命名" },
     { key: "move", label: "移动到..." },
-    { key: "reveal", label: "在 Finder 中显示" },
+    { key: "copyPath", label: "复制路径" },
     { key: "delete", label: "删除", danger: true },
   ];
   contextMenuItems.value = items;
@@ -741,6 +784,7 @@ function onFolderContextMenu(dirRel: string, e: MouseEvent) {
   if (!(level >= 3)) {
     items.push({ key: "newSub", label: "新建子文件夹" });
   }
+  items.push({ key: "copyPath", label: "复制路径" });
   items.push({ key: "delete", label: "删除", danger: true });
   contextMenuItems.value = items;
   contextMenuX.value = e.clientX;
@@ -762,10 +806,9 @@ function onContextSelect(key: string) {
       pendingMoveFile.value = file;
       moveFileVisible.value = true;
       return; // 让 moveFileVisible 接管，不执行下面的 contextMenuTarget 置空逻辑会导致问题，所以提前 return 保留 target
-    } else if (key === "reveal") {
-      revealInFinder(file.relPath).catch((e) =>
-        console.error("在 Finder 中显示失败:", e),
-      );
+    } else if (key === "copyPath") {
+      writeText(file.absPath);
+      showToast("路径已复制到剪贴板", "info");
     } else if (key === "delete") {
       removeFile(file);
     }
@@ -777,6 +820,13 @@ function onContextSelect(key: string) {
       pendingMoveFolderRel.value = dirRel;
       folderMovePickerVisible.value = true;
       return;
+    } else if (key === "copyPath") {
+      getFileAbsPath(dirRel).then((absPath) => {
+        writeText(absPath);
+        showToast("路径已复制到剪贴板", "info");
+      }).catch((e) => {
+        showToast("复制失败: " + String(e), "error");
+      });
     } else if (key === "newSub") {
       onNewSubfolder(dirRel);
     } else if (key === "delete") {
@@ -792,8 +842,13 @@ function onContextSelect(key: string) {
 </script>
 
 <template>
+  <!-- 初始化中 → 空白过渡 -->
+  <div v-if="initializing" class="app init-loading">
+    <div class="init-spinner"></div>
+  </div>
+
   <!-- 没有仓库 → 欢迎页 -->
-  <div v-if="!vaultReady" class="app">
+  <div v-else-if="!vaultReady" class="app">
     <VaultSetup @selected="onVaultSelected" />
   </div>
 
@@ -1033,6 +1088,14 @@ function onContextSelect(key: string) {
       <section class="preview">
         <template v-if="currentFile">
           <div class="preview-body">
+            <!-- 演示模式顶部透明拖拽条：让窗口可移动。
+                 宽度全屏、高度适中，浮在 iframe 之上、目录按钮之下。 -->
+            <div
+              v-if="presenting"
+              class="present-drag"
+              @mousedown="onPresentDragDown"
+              title="拖动窗口"
+            ></div>
             <p v-if="loadingContent" class="status">加载中…</p>
             <template v-else-if="currentHtml">
               <iframe
@@ -1131,7 +1194,6 @@ function onContextSelect(key: string) {
       :folders="store.dirs"
       :root-name="vaultName"
       :default-selected="pendingMoveFile?.dirPath ?? ''"
-      :exclude-dir-rel="pendingMoveFile?.dirPath || null"
       :title="`移动「${pendingMoveFile?.fileName ?? ''}」到…`"
       @confirm="onMoveFileConfirm"
       @cancel="cancelMoveFile"
@@ -1643,6 +1705,14 @@ function onContextSelect(key: string) {
   background: #ffffff;
 }
 
+/* 演示模式：根容器、preview、preview-body 全部透明，
+   让深色文档背景直通到窗口圆角边缘，杜绝圆角处透出白色底。
+   （窗口底色由 OS 层提供；文档自己铺满即可。） */
+.app.presenting,
+.app.presenting .preview,
+.app.presenting .preview-body {
+  background: transparent;
+}
 .app.presenting {
   background: #fff;
 }
@@ -1651,6 +1721,23 @@ function onContextSelect(key: string) {
 }
 .app.presenting .sidebar-handle {
   display: none;
+}
+/* 演示模式彻底移除侧边栏，避免 width:0 折叠后残留的 1px
+   border-right 在圆角 WebView / 亚像素渲染下透出白线。 */
+.app.presenting .sidebar {
+  display: none;
+}
+/* 演示模式顶部透明拖拽条：让 iframe 上方可拖拽移动窗口。
+   完全透明、不可见；只占据顶部一条带，避免覆盖正文交互；
+   z-index 高于 iframe(0)、低于 TocPanel(10)，目录按钮仍可点击。 */
+.present-drag {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  z-index: 5;
+  cursor: default;
 }
 
 .toast {
@@ -1768,6 +1855,28 @@ function onContextSelect(key: string) {
   background: var(--accent-blue-hover);
 }
 
+/* ---------- 初始化 loading ---------- */
+.init-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-sidebar);
+}
+.init-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: init-spin 0.6s linear infinite;
+}
+@keyframes init-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- transitions ---------- */
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.18s ease;
