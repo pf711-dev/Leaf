@@ -288,6 +288,22 @@ function onTopbarMouseDown(e: MouseEvent) {
   appWindow.startDragging();
 }
 
+// 无边框窗口缩放：Windows 无原生装饰，需在窗口四边/四角布置透明热区，
+// 鼠标按下时调用 startResizeDragging 触发系统缩放。macOS 走原生装饰，不渲染热区。
+const RESIZE_DIR_MAP = {
+  n: "North",
+  s: "South",
+  e: "East",
+  w: "West",
+  ne: "NorthEast",
+  nw: "NorthWest",
+  se: "SouthEast",
+  sw: "SouthWest",
+} as const;
+function startResize(dir: keyof typeof RESIZE_DIR_MAP) {
+  appWindow.startResizeDragging(RESIZE_DIR_MAP[dir]);
+}
+
 // 演示模式拖拽：演示态顶部加一条透明拖拽条，让窗口可移动。
 // 该条本身透明、不拦截点击事件以外的鼠标按下；目录按钮层级更高，
 // 点击/拖拽目录按钮时由按钮接管，不会误触发窗口拖拽。
@@ -858,6 +874,17 @@ function onContextSelect(key: string) {
     class="app"
     :class="{ presenting: presenting, maximized: windowMaximized, 'platform-mac': isMac }"
   >
+    <!-- Windows 无边框窗口缩放热区（四边 + 四角），最大化时隐藏 -->
+    <template v-if="!isMac && !windowMaximized">
+      <div class="resize-handle rz-n" @mousedown.prevent="startResize('n')"></div>
+      <div class="resize-handle rz-s" @mousedown.prevent="startResize('s')"></div>
+      <div class="resize-handle rz-w" @mousedown.prevent="startResize('w')"></div>
+      <div class="resize-handle rz-e" @mousedown.prevent="startResize('e')"></div>
+      <div class="resize-handle rz-nw" @mousedown.prevent="startResize('nw')"></div>
+      <div class="resize-handle rz-ne" @mousedown.prevent="startResize('ne')"></div>
+      <div class="resize-handle rz-sw" @mousedown.prevent="startResize('sw')"></div>
+      <div class="resize-handle rz-se" @mousedown.prevent="startResize('se')"></div>
+    </template>
     <!-- 顶部栏 -->
     <header class="topbar" @mousedown="onTopbarMouseDown">
       <div class="topbar-left">
@@ -1892,4 +1919,21 @@ function onContextSelect(key: string) {
   transform: scale(0.95);
   opacity: 0;
 }
+
+/* ---------- Windows 无边框窗口缩放热区 ---------- */
+/* 仅在窗口最外缘 6px（角部 8px）布置透明热区，捕获边缘缩放拖拽。
+   不影响内部内容交互；最大化/全屏时通过 v-if 不渲染。 */
+.resize-handle {
+  position: fixed;
+  z-index: 9999;
+  background: transparent;
+}
+.rz-n { top: 0; left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
+.rz-s { bottom: 0; left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
+.rz-w { top: 8px; bottom: 8px; left: 0; width: 6px; cursor: ew-resize; }
+.rz-e { top: 8px; bottom: 8px; right: 0; width: 6px; cursor: ew-resize; }
+.rz-nw { top: 0; left: 0; width: 8px; height: 8px; cursor: nwse-resize; }
+.rz-ne { top: 0; right: 0; width: 8px; height: 8px; cursor: nesw-resize; }
+.rz-sw { bottom: 0; left: 0; width: 8px; height: 8px; cursor: nesw-resize; }
+.rz-se { bottom: 0; right: 0; width: 8px; height: 8px; cursor: nwse-resize; }
 </style>

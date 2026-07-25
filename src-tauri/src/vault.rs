@@ -339,8 +339,24 @@ pub fn move_dir(dir_rel: &str, target_parent_rel: &str) -> Result<(), String> {
 pub fn read_file(rel_path: &str) -> Result<String, String> {
     let root = get_root()?;
     let path = root.join(rel_path);
-    std::fs::read_to_string(&path)
-        .map_err(|e| format!("读取文件失败: {}", e))
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("读取文件失败: {}", e))?;
+    Ok(strip_utf8_bom(content))
+}
+
+/// 剥离字符串开头的 UTF-8 BOM（U+FEFF）。
+///
+/// Windows 上用记事本等编辑器保存的 HTML 常带 UTF-8 BOM。
+/// `std::fs::read_to_string` 能成功读取（BOM 是合法 UTF-8 字符），
+/// 但会把 `\u{FEFF}` 作为首字符保留，导致前端 DOMParser 在 Windows WebView2
+/// 上把 BOM 当作文档根文本节点，进而使 `.toc` 目录的 querySelector 命中失败。
+/// 这里在读取后统一剥离，确保传给前端的字符串干净。
+fn strip_utf8_bom(s: String) -> String {
+    let mut s = s;
+    if s.starts_with('\u{FEFF}') {
+        s.drain(..'\u{FEFF}'.len_utf8());
+    }
+    s
 }
 
 /// 读取 HTML 文件，并自动内联同目录下的 CSS/JS/图片资源。
@@ -350,6 +366,8 @@ pub fn read_file_inlined(rel_path: &str) -> Result<String, String> {
     let path = root.join(rel_path);
     let html = std::fs::read_to_string(&path)
         .map_err(|e| format!("读取文件失败: {}", e))?;
+    // 剥离 BOM，避免 Windows WebView2 的 DOMParser 解析偏移导致目录提取失败
+    let html = strip_utf8_bom(html);
 
     // 只对 HTML 文件做资源内联
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");

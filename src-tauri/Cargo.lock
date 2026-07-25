@@ -2201,7 +2201,7 @@ dependencies = [
 
 [[package]]
 name = "leaf"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64 0.21.7",
  "chrono",

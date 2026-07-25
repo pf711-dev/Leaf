@@ -11,22 +11,11 @@ export interface TocItem {
  * 收集其中所有 href="#anchor" 的链接。
  */
 export function extractToc(html: string): TocItem[] {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-
-  // 消除可能的前导 BOM / 空白文本节点对 querySelector 的影响
-  // 某些平台（如 Windows WebView2）可能在文档根级别保留 BOM 文本节点，
-  // 导致 <html> 解析结构偏移，间接影响 .toc 的查询命中。
-  const docEl = doc.documentElement;
-
-  // 诊断日志：输出 HTML 片段特征，便于跨平台对比
-  if (typeof window !== "undefined") {
-    console.log("[extractToc] html length:", html.length,
-      "has <html>:", /<html/i.test(html),
-      "has .toc class:", /class=["']?[^"'>]*\btoc\b/i.test(html),
-      "docEl tag:", docEl?.tagName,
-      "docEl children count:", docEl?.children?.length,
-      "body child count:", doc.body?.children?.length);
-  }
+  // 剥离前导 UTF-8 BOM（U+FEFF）。Windows WebView2 的 DOMParser 会把 BOM 当作
+  // 文档根文本节点保留，导致 <html> 解析结构偏移、querySelector(".toc") 命中失败。
+  // （Rust 端 read_file_inlined 已剥离一次，这里做防御性兜底。）
+  const cleaned = html.charCodeAt(0) === 0xfeff ? html.slice(1) : html;
+  const doc = new DOMParser().parseFromString(cleaned, "text/html");
 
   // 优先在 <body> 内查找（某些解析器可能将 .toc 放错了层级）
   let toc = doc.querySelector(".toc");
@@ -37,9 +26,6 @@ export function extractToc(html: string): TocItem[] {
       const cls = el.getAttribute("class") || "";
       if (/\btoc\b/i.test(cls)) {
         toc = el;
-        if (typeof window !== "undefined") {
-          console.log("[extractToc] fallback found .toc via class regex, class=", cls);
-        }
         break;
       }
     }
@@ -47,9 +33,6 @@ export function extractToc(html: string): TocItem[] {
 
   if (toc) {
     const links = Array.from(toc.querySelectorAll('a[href^="#"]'));
-    if (typeof window !== "undefined") {
-      console.log("[extractToc] found toc element, links count:", links.length);
-    }
     const items = links
       .map((a) => ({
         id: (a.getAttribute("href") || "").substring(1),
@@ -59,9 +42,6 @@ export function extractToc(html: string): TocItem[] {
     if (items.length > 0) return items;
   }
 
-  if (typeof window !== "undefined") {
-    console.log("[extractToc] no toc found, returning empty");
-  }
   return [];
 }
 
