@@ -151,6 +151,95 @@ pub fn enable_modern_window_style<R: Runtime>(
     }
 }
 
+/// 运行时调整窗口圆角半径（仅 macOS）。
+///
+/// 用途：进入「演示模式」时把圆角设为 0，让窗口变成直角，
+/// 与直角的 iframe 文档严丝合缝；退出时恢复 12px。
+/// 若不调整，圆角窗口的弧线区域铺不满直角文档，四角会透出底层颜色。
+#[tauri::command]
+pub fn set_corner_radius<R: Runtime>(
+    _app: AppHandle<R>,
+    window: WebviewWindow<R>,
+    radius: Option<f64>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let r = radius.unwrap_or(12.0);
+
+        window
+            .with_webview(move |webview| {
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    let ns_window = webview.ns_window() as id;
+                    let content_view = ns_window.contentView();
+                    let layer: id = msg_send![content_view, layer];
+                    if !layer.is_null() {
+                        let _: () = msg_send![layer, setCornerRadius: r];
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        let _ = radius;
+        Ok(())
+    }
+}
+
+/// 设置红黄绿三个窗口按钮（Traffic Lights）的显隐（仅 macOS）。
+///
+/// 用途：进入「演示模式」时隐藏它们，避免遮挡文档内容；退出时恢复显示。
+/// 实现方式：直接对三个 standardWindowButton 调用 setHidden:。
+/// 为避免按钮隐藏后其 superview（NSThemeCloseWidget 容器）仍占据
+/// 顶部悬停热区拦截鼠标，对每个按钮的 superview 也一并切换显隐。
+#[tauri::command]
+pub fn set_traffic_lights_visible<R: Runtime>(
+    _app: AppHandle<R>,
+    window: WebviewWindow<R>,
+    visible: Option<bool>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let v = visible.unwrap_or(true);
+
+        window
+            .with_webview(move |webview| {
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    let ns_window = webview.ns_window() as id;
+                    let hidden = if v { 0 } else { 1 }; // YES(1) = 隐藏
+                    // 关闭、最小化、最大化三个按钮：按钮本身 + 其直接父视图一起切换显隐。
+                    for idx in 0..3u64 {
+                        let btn: id = msg_send![ns_window, standardWindowButton: idx];
+                        if btn.is_null() {
+                            continue;
+                        }
+                        let _: () = msg_send![btn, setHidden: hidden];
+                        let sup: id = msg_send![btn, superview];
+                        if !sup.is_null() {
+                            let _: () = msg_send![sup, setHidden: hidden];
+                        }
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        let _ = visible;
+        Ok(())
+    }
+}
+
 /// Repositions Traffic Lights only (useful after fullscreen toggle)
 #[tauri::command]
 pub fn reposition_traffic_lights<R: Runtime>(
@@ -175,10 +264,10 @@ pub fn reposition_traffic_lights<R: Runtime>(
                 }
             })
             .map_err(|e| e.to_string())?;
-        
+
         Ok(())
     }
-    
+
     #[cfg(not(target_os = "macos"))]
     {
         Ok(())
