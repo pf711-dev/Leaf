@@ -64,17 +64,16 @@ html,body{margin:0;padding:0;}
 html{min-width:auto;overflow-x:hidden;}
 .toc{display:none !important;}
 .layout{grid-template-columns:1fr !important;}
-/* 滚动条：恢复 macOS 原生 Overlay 行为（默认不显示，滚动时浮现、不占宽度）。
-   清除被导入文档可能自定义的 ::-webkit-scrollbar 样式，横向纵向一致。
-   关键：轨道、横向滚动条、右下角 corner 全部透明，否则在深色文档背景上
-   会透出一条底部白线 + 右下角白色矩形。 */
-*{scrollbar-width:auto;}
-::-webkit-scrollbar{width:auto;height:auto;background:transparent !important;}
-::-webkit-scrollbar-thumb{background:initial !important;}
-::-webkit-scrollbar-track{background:initial !important;}
-::-webkit-scrollbar-track-piece{background:transparent !important;}
-::-webkit-scrollbar-corner{background:transparent !important;}
-::-webkit-scrollbar:horizontal{height:auto;background:transparent !important;display:none;}
+/* 滚动条：完全隐藏（纵向 + 横向 + 角块），消除预览/演示时右侧的竖条轨道。
+   滚动能力保留——overflow 仍为默认 auto/scroll，滚轮、触控板、键盘均可滚动。
+   scrollbar-width:none（标准/Firefox）+ ::-webkit-scrollbar{display:none}（WebKit/Chromium）
+   双管齐下，覆盖 WKWebView 与 WebView2，并压制文档自定义的滚动条样式。 */
+*{scrollbar-width:none !important;}
+::-webkit-scrollbar{display:none !important;width:0 !important;height:0 !important;}
+::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-track-piece,
+::-webkit-scrollbar-corner{display:none !important;}
 </style>
 <script id="_preview_nav">
 (function(){

@@ -1279,6 +1279,19 @@ function onContextSelect(key: string) {
   height: 100%;
   background: var(--bg-sidebar);
 }
+/* macOS 普通态：窗口是 12px 圆角（OS 层 masksToBounds 裁剪）。
+   让 .app 成为同尺寸的圆角裁剪容器，使深色文档铺到边缘时，
+   圆角弧线处显示子元素内容色（而非 .app 米白底透出一圈白边）。
+   Windows 无边框窗口无 OS 圆角，不加圆角避免四角出现缺口。 */
+.app.platform-mac {
+  border-radius: 12px;
+  overflow: hidden;
+}
+/* 演示态 / 最大化：窗口已转直角，CSS 圆角同步归零，避免双重裁剪缝隙。 */
+.app.platform-mac.presenting,
+.app.platform-mac.maximized {
+  border-radius: 0;
+}
 
 /* ---------- 顶部栏 ---------- */
 .topbar {
@@ -1603,6 +1616,11 @@ function onContextSelect(key: string) {
 .sidebar-handle:hover,
 .sidebar-handle.active {
   background: var(--border);
+}
+/* 侧边栏收起时隐藏拖拽手柄，避免其在左侧残留 6px 空白条
+   （演示模式另有 .app.presenting .sidebar-handle { display:none } 兜底）。 */
+.sidebar.collapsed + .sidebar-handle {
+  display: none;
 }
 
 .icon-btn {
