@@ -162,18 +162,20 @@ pub fn rename_item(rel_path: &str, new_name: &str, is_dir: bool) -> Result<(), S
     let src = root.join(rel_path);
     let parent = src.parent().unwrap_or(&root);
 
-    // 对于文件重命名：如果新名称没有扩展名，自动保留原文件的扩展名
-    // 防止前端只传主名（如 "abc"）导致文件丢失 .html 后缀而无法被索引
+    // 对于文件重命名：保证最终文件名以 .html / .htm 结尾，否则无法被索引。
+    //
+    // 不能用 Path::extension() 判断「新名是否带扩展名」——它把最后一个 '.'
+    // 之后的全部字符当作扩展名，于是 "v2.0 报告"、"2026.07.25 纪要" 这类
+    // 带点的标题会被误判为「有扩展名」（如 "0 报告"），跳过补全导致 .html 丢失。
+    //
+    // 正确做法：直接校验新名是否以 .html / .htm 结尾（大小写不敏感）。
+    // 不带则补 .html；带则原样使用。
     let final_name = if !is_dir {
-        let src_ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let new_ext = std::path::Path::new(new_name)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        if new_ext.is_empty() && !src_ext.is_empty() {
-            format!("{}.{}", new_name, src_ext)
-        } else {
+        let lower = new_name.to_lowercase();
+        if lower.ends_with(".html") || lower.ends_with(".htm") {
             new_name.to_string()
+        } else {
+            format!("{}.html", new_name)
         }
     } else {
         new_name.to_string()
