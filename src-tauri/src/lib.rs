@@ -7,6 +7,7 @@ mod db;
 mod inliner;
 mod library;
 mod parser;
+mod pdf;
 mod plugins;
 mod vault;
 
@@ -31,6 +32,8 @@ macro_rules! app_commands {
             commands::move_vault_dir,
             commands::reveal_in_finder,
             commands::get_file_abs_path,
+            pdf::print_to_pdf,
+            pdf::show_print_dialog,
             #[cfg(target_os = "macos")]
             plugins::mac_rounded_corners::enable_rounded_corners,
             #[cfg(target_os = "macos")]

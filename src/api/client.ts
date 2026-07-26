@@ -76,7 +76,27 @@ export function revealInFinder(relPath: string): Promise<void> {
   return invoke<void>("reveal_in_finder", { relPath });
 }
 
-/** 返回某文件的绝对路径。 */
+/** 返回某文件的绝对路径（复制/引用用）。 */
 export function getFileAbsPath(relPath: string): Promise<string> {
   return invoke<string>("get_file_abs_path", { relPath });
+}
+
+// ==================== PDF 导出 ====================
+
+/**
+ * 静默导出当前 WebView 为 PDF（仅 Windows 实现）。
+ * 内部走 WebView2 的 PrintToPdf，强制保留彩色背景（ShouldPrintBackgrounds=true）。
+ * 非 Windows 平台返回错误。
+ */
+export function printToPdf(outPath: string): Promise<void> {
+  return invoke<void>("print_to_pdf", { outPath });
+}
+
+/**
+ * 弹出原生打印面板（仅 macOS 实现）。
+ * 内部走 NSPrintOperation（WKWebView 不实现 window.print()，只能用原生）。
+ * 用户在面板里选"PDF → 存储为 PDF"即可导出。
+ */
+export function showPrintDialog(): Promise<void> {
+  return invoke<void>("show_print_dialog");
 }

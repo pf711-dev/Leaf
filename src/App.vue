@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { useDocumentsStore } from "./stores/documents";
 import {
   setVaultRoot,
@@ -10,6 +11,7 @@ import {
   readFileInlined,
   writeFileContent,
   getFileAbsPath,
+  printToPdf,
 } from "./api/client";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { extractToc, preparePreviewHtml, type TocItem } from "./utils/html";
@@ -455,6 +457,84 @@ function postToIframe(msg: object) {
   iframeRef.value?.contentWindow?.postMessage(msg, "*");
 }
 
+// ─── 导出 PDF ───
+
+const exportingPdf = ref(false);
+
+/**
+ * 导出当前文档为 PDF。
+ *
+ * - Windows：调 print_to_pdf 走 WebView2 PrintToPdf 静默生成。
+ * - macOS：调 show_print_dialog 弹出原生打印面板（异步 sheet 形式），
+ *   用户在面板里选"PDF → 存储为 PDF"，利用 @media print 样式自动分页。
+ */
+async function onExportPdf() {
+  const file = currentFile.value;
+  if (!file || exportingPdf.value) return;
+  exportingPdf.value = true;
+  try {
+    if (isMac.value) {
+      // macOS：createPDFWithConfiguration 捕捉整个可滚动区域。
+      // 隐藏 Leaf UI 元素，插入文档包装层（白底），确保 PDF 只有文档内容。
+      const headMatch = currentHtml.value.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+      const bodyMatch = currentHtml.value.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+      const docHtml = (headMatch?.[1] || "") + (bodyMatch?.[1] || "");
+
+      // 隐藏整个 #app（Leaf UI 的 Vue 挂载点），确保 PDF 没有任何残留空间
+      const appEl = document.getElementById("app") as HTMLElement | null;
+      const origAppDisplay = appEl?.style.display || "";
+      if (appEl) appEl.style.display = "none";
+
+      const origBodyBg = document.body.style.background;
+      const origBodyMargin = document.body.style.margin;
+      const origBodyPadding = document.body.style.padding;
+      document.body.style.background = "#fff";
+      document.body.style.margin = "0";
+      document.body.style.padding = "0";
+
+      // 插入文档包装层（正常流，白底，完整展开）
+      const wrapper = document.createElement("div");
+      wrapper.style.cssText = "background:#fff;padding:0;margin:0;";
+      wrapper.innerHTML = docHtml;
+      document.body.appendChild(wrapper);
+      await nextTick();
+
+      const defaultName = (file.title || file.fileName || "文档").replace(/[\\/:*?"<>|]/g, "_");
+      const target = await save({
+        defaultPath: `${defaultName}.pdf`,
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+      try {
+        if (target) {
+          await printToPdf(target);
+          showToast("已导出到 " + target, "info");
+        }
+      } finally {
+        // 恢复状态
+        wrapper.remove();
+        document.body.style.background = origBodyBg;
+        document.body.style.margin = origBodyMargin;
+        document.body.style.padding = origBodyPadding;
+        if (appEl) appEl.style.display = origAppDisplay;
+      }
+    } else {
+      // Windows：静默生成 PDF
+      const defaultName = (file.title || file.fileName || "文档").replace(/[\\/:*?"<>|]/g, "_");
+      const target = await save({
+        defaultPath: `${defaultName}.pdf`,
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+      if (!target) return;
+      await printToPdf(target);
+      showToast("已导出到 " + target, "info");
+    }
+  } catch (e) {
+    showToast("导出失败: " + String(e), "error");
+  } finally {
+    exportingPdf.value = false;
+  }
+}
+
 // 监听 folderError
 watch(
   () => store.folderError,
@@ -529,12 +609,18 @@ async function onVaultSelected(rootPath: string) {
 // ─── 文件变更监听 ───
 
 let vaultUpdatedUnlisten: UnlistenFn | null = null;
+let pdfErrorUnlisten: UnlistenFn | null = null;
 
 async function startVaultListener() {
   vaultUpdatedUnlisten = await listen("vault-updated", () => {
     // 文件变更：刷新列表
     store.refresh();
     // 如果当前预览的文件恰好在变更中，不主动重载（编辑模式时避免覆盖用户改动）
+  });
+  // macOS 打印初始化失败时（with_webview 闭包异步执行，无法同步回传），
+  // Rust 端发此事件兜底，前端显示错误 toast。
+  pdfErrorUnlisten = await listen<string>("pdf-export-error", (e) => {
+    showToast("导出失败: " + e.payload, "error");
   });
 }
 
@@ -568,6 +654,7 @@ onUnmounted(() => {
   window.removeEventListener("keydown", onKeydown);
   window.removeEventListener("mousedown", onGlobalMouseDown);
   if (vaultUpdatedUnlisten) vaultUpdatedUnlisten();
+  if (pdfErrorUnlisten) pdfErrorUnlisten();
   onUnmountedCleanup.forEach((fn) => fn());
 });
 
@@ -974,6 +1061,9 @@ function onContextSelect(key: string) {
           </button>
           <button class="btn" :disabled="!currentFile" @click="enterPresent">
             演示
+          </button>
+          <button class="btn" :disabled="!currentFile || exportingPdf" @click="onExportPdf">
+            {{ exportingPdf ? "导出中…" : "导出 PDF" }}
           </button>
         </template>
       </div>
@@ -1954,4 +2044,51 @@ function onContextSelect(key: string) {
 .rz-ne { top: 0; right: 0; width: 8px; height: 8px; cursor: nesw-resize; }
 .rz-sw { bottom: 0; left: 0; width: 8px; height: 8px; cursor: nesw-resize; }
 .rz-se { bottom: 0; right: 0; width: 8px; height: 8px; cursor: nwse-resize; }
+
+/* ============================================================
+   打印 / PDF 导出样式
+   两种导出路径（Windows WebView2 PrintToPdf 静默、macOS 系统打印对话框）
+   打印的都是整个 WebView，因此必须在此隐藏 Leaf 自身 UI（顶栏、侧栏、
+   目录面板、窗口控制、调整手柄、toast），只保留 iframe 文档内容并让其全屏。
+   配合 iframe 内注入的 print-color-adjust:exact 保留文档彩色背景。
+   ============================================================ */
+
+@media print {
+  /* 隐藏所有 Leaf UI */
+  .topbar,
+  .sidebar,
+  .toc-layer,
+  .win-ctrl,
+  .resize-handle,
+  .present-drag,
+  .toast {
+    display: none !important;
+  }
+
+  /* 重置根容器布局：Windows WebView2 PrintToPdf 走此路径 */
+  .app,
+  .content,
+  .preview,
+  .preview-body {
+    display: block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  .preview-iframe {
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    border: none !important;
+  }
+
+  @page {
+    margin: 12mm;
+  }
+}
 </style>

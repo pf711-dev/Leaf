@@ -74,6 +74,17 @@ html{min-width:auto;overflow-x:hidden;}
 ::-webkit-scrollbar-track,
 ::-webkit-scrollbar-track-piece,
 ::-webkit-scrollbar-corner{display:none !important;}
+/* PDF 导出：强制保留彩色背景。
+   浏览器/WebView 默认省墨会丢弃 background-color/background-image，
+   导致用户文档（Tailwind 彩色卡片、ECharts 主题等）打印后变白。
+   print-color-adjust:exact（标准）+ -webkit-print-color-adjust:exact（Chromium）
+   双保险，配合 Windows 端 PrintSettings.ShouldPrintBackgrounds=true。 */
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
 </style>
 <script id="_preview_nav">
 (function(){
@@ -163,6 +174,13 @@ html{min-width:auto;overflow-x:hidden;}
       // doctype 可能丢失，尽量补回
       var dt=document.doctype?"<!DOCTYPE "+(document.doctype.name||"html")+">":"";
       parent.postMessage({type:"html-content",html:dt+html},"*");
+    }else if(d.type==="get-content-height"){
+      // PDF 导出前获取文档完整高度，让打印面板能渲染整篇文档
+      var h=Math.max(
+        document.documentElement.scrollHeight||0,
+        document.body?document.body.scrollHeight:0
+      );
+      parent.postMessage({type:"content-height",height:h},"*");
     }
   });
   // 拦截文档中所有 # 锚点链接点击（内置目录等），

@@ -2204,8 +2204,10 @@ name = "leaf"
 version = "0.2.3"
 dependencies = [
  "base64 0.21.7",
+ "block",
  "chrono",
  "cocoa",
+ "core-graphics 0.24.0",
  "directories",
  "notify",
  "objc",
@@ -2220,8 +2222,11 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tokio",
  "uuid",
  "walkdir",
+ "webview2-com",
+ "windows",
 ]
 
 [[package]]
