@@ -120,7 +120,7 @@ unsafe fn print_via_webview2(
         ICoreWebView2PrintToPdfCompletedHandler,
     };
     use webview2_com::PrintToPdfCompletedHandler;
-    use windows::core::{BOOL, HRESULT, Interface};
+    use windows::core::Interface;
 
     let controller = webview.controller();
     let core = controller
@@ -151,11 +151,11 @@ unsafe fn print_via_webview2(
                 .PrintToPdf(&path_h, &settings, &handler)
                 .map_err(|e| e.into())
         }),
-        Box::new(move |_hr: HRESULT, is_successful: BOOL| {
-            if is_successful.as_bool() {
+        Box::new(move |result: Result<(), _>, is_successful| {
+            if is_successful {
                 Ok(())
             } else {
-                Err(windows::core::Error::from(HRESULT(-1)))
+                result
             }
         }),
     )
