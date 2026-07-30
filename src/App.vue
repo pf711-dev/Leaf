@@ -14,11 +14,18 @@ import {
   printToPdf,
 } from "./api/client";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { extractToc, preparePreviewHtml, type TocItem } from "./utils/html";
+import { extractToc, preparePreviewHtml, prepareEditHtml, type TocItem } from "./utils/html";
 import DocumentListItem from "./components/DocumentListItem.vue";
 import FolderTree from "./components/FolderTree.vue";
 import TocPanel from "./components/TocPanel.vue";
+import EditPanel from "./components/EditPanel.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
+// 编辑引擎（跑在父窗口，通过同域 iframe 的 contentDocument 直接操作 DOM）
+import { Selector, type SelectionInfo } from "./editor/selector";
+import { DragController } from "./editor/drag";
+import { markLockedRegions, resetEditIdCounter } from "./editor/targets";
+import { serializeDocument } from "./editor/serializer";
+import { removeOverlay } from "./editor/overlay";
 import ContextMenu, { type MenuItem } from "./components/ContextMenu.vue";
 import VaultSetup from "./components/VaultSetup.vue";
 import FolderPickerDialog from "./components/FolderPickerDialog.vue";
@@ -26,20 +33,6 @@ import { enableModernWindowStyle } from "@cloudworxx/tauri-plugin-mac-rounded-co
 import {
   PanelLeftOpen,
   PanelLeftClose,
-  Bold,
-  Italic,
-  Underline,
-  Strikethrough,
-  AlignLeft,
-  AlignCenter,
-  AlignRight,
-  Undo2,
-  Redo2,
-  RotateCcw,
-  ChevronDown,
-  Baseline,
-  AArrowUp,
-  AArrowDown,
   Plus,
   ListTodo,
   X,
@@ -66,6 +59,26 @@ const activeTocId = ref("");
 
 // iframe
 const iframeRef = ref<HTMLIFrameElement | null>(null);
+// 编辑 iframe（同域 allow-same-origin，父窗口可直接读写 contentDocument）
+const editIframeRef = ref<HTMLIFrameElement | null>(null);
+// 编辑态专用 HTML（经 prepareEditHtml 处理）
+const editHtml = ref("");
+
+// 编辑引擎实例（仅编辑态存在）
+let editorSelector: Selector | null = null;
+let editorDrag: DragController | null = null;
+// 当前选中元素快照（供 EditPanel 读取计算样式）
+const selection = ref<SelectionInfo | null>(null);
+// 选中元素的计算样式快照
+const selectionStyle = ref<Record<string, string>>({});
+// 编辑态是否有未保存改动
+const dirty = ref(false);
+// 是否处于文字编辑状态（双击 text 元素进入局部 contenteditable）
+const isTextEditing = ref(false);
+// 退出编辑确认对话框（有未保存改动时弹出）
+const unsavedDialogVisible = ref(false);
+// 待执行的退出动作（确认后执行）
+let pendingExitAction: (() => void) | null | undefined = null;
 
 // 展开的文件夹 id 集合
 const expandedFolderIds = ref<Set<string>>(new Set());
@@ -350,37 +363,6 @@ function showToast(msg: string, type: "info" | "error" = "info", duration = 3500
 const editing = ref(false);
 const saving = ref(false);
 
-const openDropdown = ref<"color" | null>(null);
-
-const textColors = [
-  { value: "#212121", label: "黑色" },
-  { value: "#757575", label: "灰色" },
-  { value: "#E03440", label: "红色" },
-  { value: "#FF7A45", label: "橙色" },
-  { value: "#FFC400", label: "黄色" },
-  { value: "#00B42A", label: "绿色" },
-  { value: "#006AFA", label: "蓝色" },
-  { value: "#722ED1", label: "紫色" },
-];
-const bgColors = [
-  { value: "transparent", label: "无填充" },
-  { value: "#F2F2F2", label: "浅灰" },
-  { value: "#FFECE8", label: "浅红" },
-  { value: "#FFF3E8", label: "浅橙" },
-  { value: "#FFF7E8", label: "浅黄" },
-  { value: "#E8FFEA", label: "浅绿" },
-  { value: "#E8F3FF", label: "浅蓝" },
-  { value: "#F5E8FF", label: "浅紫" },
-  { value: "#E5E5E5", label: "中灰" },
-  { value: "#BFBFBF", label: "深灰" },
-  { value: "#FFCCC7", label: "红" },
-  { value: "#FFD591", label: "橙" },
-  { value: "#FFFB8F", label: "黄" },
-  { value: "#B7EB8F", label: "绿" },
-  { value: "#ADC6FF", label: "蓝" },
-  { value: "#D3ADF7", label: "紫" },
-];
-
 // 窗口圆角半径：正常态 12px（与 enableModernWindowStyle 一致），演示态 0px。
 // 演示时窗口变直角，与直角的 iframe 文档严丝合缝，杜绝圆角处透出底层颜色。
 const RADIUS_NORMAL = 12;
@@ -400,7 +382,11 @@ function setTrafficLightsVisible(v: boolean) {
 }
 
 function enterPresent() {
-  if (editing.value) exitEdit();
+  // 编辑态进入演示：若有改动弹确认（确认后才进入演示）
+  if (editing.value) {
+    requestExitEdit(() => enterPresent());
+    return;
+  }
   sidebarWasWidth.value = sidebarWidth.value;
   sidebarWidth.value = 0;
   presenting.value = true;
@@ -416,45 +402,319 @@ function exitPresent() {
   setTrafficLightsVisible(true);
 }
 
-function enterEdit() {
+/**
+ * 进入编辑模式。
+ * 切换到同域编辑 iframe（allow-same-origin），加载后挂载编辑引擎。
+ */
+async function enterEdit() {
+  if (!currentFile.value) return;
   if (presenting.value) exitPresent();
+  loadingContent.value = true;
+  try {
+    // 编辑态从原始（内联资源后的）HTML 重新准备，不复用已被预览处理的 currentHtml
+    const raw = await readFileInlined(currentFile.value.relPath);
+    editHtml.value = prepareEditHtml(raw);
+  } finally {
+    loadingContent.value = false;
+  }
   editing.value = true;
-  postToIframe({ type: "edit-mode", enabled: true });
+  dirty.value = false;
+  // 等编辑 iframe 渲染（srcdoc 绑定触发），load 后挂载引擎
+  await nextTick();
+  mountEditorOnLoad();
 }
 
+/** 标记文档已改动（编辑引擎回调）。 */
+function markDirty() {
+  dirty.value = true;
+}
+
+/**
+ * 等待编辑 iframe 加载完成后，按当前 editMode 挂载对应能力。
+ *
+ * 时序关键：Vue 的 :srcdoc 绑定触发 iframe 异步加载。判据不是 readyState
+ * （srcdoc 刚赋值时 readyState 可能瞬时为 complete 却是空文档），而是
+ * 「contentDocument 可访问 + body 存在且有子节点 + selector 尚未挂载」。
+ * 用轮询（50ms 间隔，最长 ~3s）等待这三个条件，确保用户文档真正就绪后再挂引擎。
+ */
+function mountEditorOnLoad() {
+  const iframe = editIframeRef.value;
+  if (!iframe) {
+    console.warn("[leaf-editor] editIframeRef 未就绪");
+    return;
+  }
+  let attempts = 0;
+  const MAX_ATTEMPTS = 60; // 60 × 50ms = 3s
+  const poll = () => {
+    attempts++;
+    // 已挂载则停止（避免重复挂载，如 load 事件 + 轮询同时命中）
+    if (editorSelector) return;
+    let doc = null;
+    try {
+      doc = iframe.contentDocument;
+    } catch {
+      // 跨域访问异常（理论上 allow-same-origin 下不会发生）
+      doc = null;
+    }
+    // 就绪判据：可访问 + body 存在 + body 有真实内容（子节点数 > 0 或文本）
+    const ready =
+      !!doc &&
+      !!doc.body &&
+      (doc.body.childNodes.length > 0 || (doc.body.textContent || "").trim().length > 0);
+    if (!ready) {
+      if (attempts < MAX_ATTEMPTS) {
+        setTimeout(poll, 50);
+      } else {
+        console.warn("[leaf-editor] 等待文档就绪超时");
+      }
+      return;
+    }
+    const readyDoc = doc!; // 此处 doc 已确认非空（ready 判据保证）
+    // 重置 edit-id 计数器 + 标记锁定区（head 整体只读）
+    resetEditIdCounter();
+    markLockedRegions(readyDoc);
+    // 选择器始终创建（构造不挂事件），由 enable 显式启用
+    editorSelector = new Selector(readyDoc, {
+      onChange: onSelectionChange,
+      onDirty: markDirty,
+      onEditingChange: (editing) => {
+        isTextEditing.value = editing;
+      },
+    });
+    // 拖拽控制器（手柄在 select 模式选中 container 时才挂）
+    editorDrag = new DragController(readyDoc, editorSelector, {
+      onEnd: () => {
+        editorSelector?.reposition();
+        markDirty();
+      },
+    });
+    // 直接启用选择器（不再有文字/选择双模式切换）
+    editorSelector.enable();
+    console.log("[drag-debug] 编辑引擎挂载完成", { hasDrag: !!editorDrag, hasSelector: !!editorSelector });
+  };
+  poll();
+}
+
+/** 注载编辑引擎（退出编辑 / 切换文件时调用）。 */
+function detachEditor() {
+  editorDrag?.detach();
+  editorSelector?.detach();
+  editorDrag = null;
+  editorSelector = null;
+  const doc = editIframeRef.value?.contentDocument;
+  if (doc) {
+    // 清理覆盖层（防止残留进保存序列化）
+    removeOverlay(doc);
+  }
+}
+
+/**
+ * 选中变化回调：刷新属性面板的计算样式快照 + 重定位拖拽手柄。
+ */
+function onSelectionChange(info: SelectionInfo | null) {
+  selection.value = info;
+  if (!info) {
+    selectionStyle.value = {};
+    editorDrag?.removeHandle();
+    return;
+  }
+  // 读取选中元素的计算样式回填属性面板
+  const win = editIframeRef.value?.contentWindow as (Window & typeof globalThis) | null;
+  if (win) {
+    const cs = win.getComputedStyle(info.el);
+    selectionStyle.value = {
+      fontSize: cs.fontSize,
+      color: cs.color,
+      width: cs.width,
+      height: cs.height,
+      backgroundColor: cs.backgroundColor,
+      textAlign: cs.textAlign,
+    };
+  }
+  // container 类才挂载拖拽手柄（text 类靠双击改字，不拖拽）
+  if (info.kind === "container") {
+    const ownerDoc = info.el.ownerDocument;
+    const overlay = ownerDoc?.getElementById("leaf-editor-overlay");
+    console.log("[drag-debug] onSelectionChange", {
+      kind: info.kind,
+      tag: info.tag,
+      hasOwnerDoc: !!ownerDoc,
+      hasOverlay: !!overlay,
+      hasDrag: !!editorDrag,
+      overlayInDOM: overlay ? ownerDoc?.body?.contains(overlay) : false,
+    });
+    if (overlay) {
+      editorDrag?.attachHandle(overlay as HTMLElement);
+      editorDrag?.positionHandle();
+      console.log("[drag-debug] handle attached, position:", {
+        left: (editorDrag as any).handle?.style?.left,
+        top: (editorDrag as any).handle?.style?.top,
+      });
+    } else {
+      console.warn("[drag-debug] 覆盖层未找到，手柄无法挂载");
+    }
+  } else {
+    editorDrag?.removeHandle();
+  }
+}
+
+// ─── 属性面板操作（转发给选择器写 inline style）───
+
+function onUpdateStyle(prop: string, value: string) {
+  editorSelector?.updateStyle(prop, value);
+}
+
+function onDeleteElement() {
+  const el = editorSelector?.selected?.el;
+  if (!el) return;
+  el.remove();
+  selection.value = null;
+  selectionStyle.value = {};
+  editorSelector?.select(null);
+  markDirty();
+}
+
+function onDuplicateElement() {
+  const target = editorSelector?.selected;
+  if (!target) return;
+  const clone = target.el.cloneNode(true) as HTMLElement;
+  // 克隆后偏移一点，便于看到
+  const existing = target.el.style.transform;
+  clone.style.transform = existing ? existing : "translate(8px,8px)";
+  target.el.after(clone);
+  markDirty();
+}
+
+function onResetStyle() {
+  const el = editorSelector?.selected?.el;
+  if (!el) return;
+  el.removeAttribute("style");
+  onSelectionChange(selection.value);
+  markDirty();
+}
+
+/** 退出编辑模式（不弹确认）。清理引擎 + 回到预览态。 */
 function exitEdit() {
-  postToIframe({ type: "edit-mode", enabled: false });
+  detachEditor();
   editing.value = false;
-  openDropdown.value = null;
+  isTextEditing.value = false;
+  selection.value = null;
+  selectionStyle.value = {};
+  // 释放编辑 iframe 内容，缓解双 iframe 内存占用
+  editHtml.value = "";
+}
+
+/**
+ * 带未保存确认的退出。若有改动弹确认，否则直接退出。
+ * @param after 确认丢弃后执行的回调（如切到下一文件）
+ */
+function requestExitEdit(after?: () => void) {
+  if (!dirty.value) {
+    exitEdit();
+    after?.();
+    return;
+  }
+  pendingExitAction = after;
+  unsavedDialogVisible.value = true;
+}
+
+/** 退出确认对话框：确认丢弃。 */
+function onUnsavedConfirm() {
+  unsavedDialogVisible.value = false;
+  dirty.value = false;
+  exitEdit();
+  pendingExitAction?.();
+  pendingExitAction = null;
+}
+
+/** 退出确认对话框：取消（留在编辑态）。 */
+function onUnsavedCancel() {
+  unsavedDialogVisible.value = false;
+  pendingExitAction = null;
 }
 
 function cancelEdit() {
-  exitEdit();
-  if (currentFile.value) reloadCurrentFile();
+  requestExitEdit(() => {
+    if (currentFile.value) reloadCurrentFile();
+  });
 }
 
+/**
+ * 执行文字格式命令。
+ * 编辑态直接对 contentDocument 调 execCommand（不再走 postMessage）。
+ */
 function runFormat(command: string, value?: string) {
-  postToIframe({ type: "exec", command, value });
+  const doc = editIframeRef.value?.contentDocument;
+  if (!doc) return;
+  doc.execCommand(command, false, value);
+  markDirty();
 }
 
-function toggleDropdown() {
-  openDropdown.value = openDropdown.value === "color" ? null : "color";
+/**
+ * 字号增减：编辑态直接在 contentDocument 上操作。
+ * 复用预览态的双路径 fallback 逻辑（Range / execCommand insertHTML）。
+ */
+function bumpFontSize(dir: 1 | -1) {
+  const win = editIframeRef.value?.contentWindow as (Window & typeof globalThis) | null;
+  const doc = editIframeRef.value?.contentDocument;
+  if (!win || !doc) return;
+  const STEP = 2;
+  const MIN_PX = 10;
+  const MAX_PX = 72;
+  const sel = win.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  const sc = range.startContainer;
+  const refEl = sc.nodeType === 1 ? (sc as HTMLElement) : sc.parentElement;
+  if (!refEl) return;
+  const curPx = parseFloat(win.getComputedStyle(refEl).fontSize) || 16;
+  let nextPx = Math.max(MIN_PX, Math.min(MAX_PX, Math.round(curPx) + dir * STEP));
+  if (nextPx === Math.round(curPx)) nextPx += dir;
+  nextPx = Math.max(MIN_PX, Math.min(MAX_PX, nextPx));
+  const frag = range.cloneContents();
+  const tmp = doc.createElement("div");
+  tmp.appendChild(frag);
+  const span = doc.createElement("span");
+  span.style.cssText = `font-size:${nextPx}px !important;line-height:1.4 !important;`;
+  span.innerHTML = tmp.innerHTML;
+  try {
+    range.deleteContents();
+    range.insertNode(span);
+    const nr = doc.createRange();
+    nr.selectNodeContents(span);
+    sel.removeAllRanges();
+    sel.addRange(nr);
+  } catch {
+    doc.execCommand(
+      "insertHTML",
+      false,
+      `<span style="${span.style.cssText}">${tmp.innerHTML}</span>`,
+    );
+  }
+  markDirty();
 }
 
-function resetColor() {
-  postToIframe({ type: "exec", command: "foreColor", value: "#212121" });
-  postToIframe({ type: "exec", command: "hiliteColor", value: "transparent" });
-  openDropdown.value = null;
-}
-
+/**
+ * 保存编辑。
+ * 编辑态直接序列化 contentDocument（不再走 postMessage get-html）：
+ * 克隆 documentElement → 清理编辑器注入痕迹 → 补 doctype → 写回源文件。
+ */
 async function saveEdit() {
-  if (!currentFile.value || saving.value) return;
+  const f = currentFile.value;
+  const doc = editIframeRef.value?.contentDocument;
+  if (!f || !doc || saving.value) return;
   saving.value = true;
-  postToIframe({ type: "get-html" });
-}
-
-function postToIframe(msg: object) {
-  iframeRef.value?.contentWindow?.postMessage(msg, "*");
+  try {
+    const html = serializeDocument(doc);
+    await writeFileContent(f.relPath, html);
+    dirty.value = false;
+    exitEdit();
+    await reloadCurrentFile();
+  } catch (err) {
+    console.error("保存失败:", err);
+  } finally {
+    saving.value = false;
+  }
 }
 
 // ─── 导出 PDF ───
@@ -658,47 +918,25 @@ onUnmounted(() => {
   onUnmountedCleanup.forEach((fn) => fn());
 });
 
-function onGlobalMouseDown(e: MouseEvent) {
-  if (openDropdown.value) {
-    const target = e.target as HTMLElement;
-    if (!target.closest(".fmt-dropdown")) {
-      openDropdown.value = null;
-    }
-  }
+function onGlobalMouseDown(_e: MouseEvent) {
+  // 预留给后续扩展（如面板外点击关闭）
 }
 
-// ─── iframe 消息处理 ───
+// ─── iframe 消息处理（仅预览态 iframe 使用 postMessage 协议）───
+// 编辑态走同域 contentDocument 直接操作，不依赖这些消息。
 
 function onIframeMessage(e: MessageEvent) {
   const d = e.data;
   if (!d) return;
   if (d.type === "bump-error") {
-    // 编辑错误（如字体增减失败），开发阶段可见
+    // 预览态字号增减错误（历史遗留，开发阶段可见）
     console.warn("[iframe bump-error]", d.msg);
   } else if (d.type === "toc-active") {
     activeTocId.value = d.id || "";
   } else if (d.type === "esc") {
-    if (editing.value) exitEdit();
-    else if (presenting.value) exitPresent();
-  } else if (d.type === "html-content" && saving.value) {
-    onHtmlContentForSave(d.html);
-  }
-}
-
-async function onHtmlContentForSave(html: string) {
-  const f = currentFile.value;
-  if (!f) {
-    saving.value = false;
-    return;
-  }
-  try {
-    await writeFileContent(f.relPath, html);
-    exitEdit();
-    await reloadCurrentFile();
-  } catch (err) {
-    console.error("保存失败:", err);
-  } finally {
-    saving.value = false;
+    // 编辑态的 Esc 由编辑引擎在 contentDocument 上捕获处理（取消选中/退出文字编辑），
+    // 这里只处理预览/演示态的 Esc（由预览 iframe 转发）。
+    if (presenting.value) exitPresent();
   }
 }
 
@@ -706,7 +944,17 @@ async function onHtmlContentForSave(html: string) {
 
 async function selectFile(file: VaultFile) {
   if (currentFile.value?.id === file.id) return;
-  if (editing.value) exitEdit();
+  // 编辑态切文件：若有未保存改动，弹确认丢弃后再切换；无改动直接切
+  if (editing.value) {
+    if (dirty.value) {
+      requestExitEdit(async () => {
+        currentFile.value = file;
+        await reloadCurrentFile();
+      });
+      return;
+    }
+    exitEdit();
+  }
   currentFile.value = file;
   await reloadCurrentFile();
 }
@@ -826,8 +1074,9 @@ function onCancelFileRename() {
 
 function syncCurrentFile() {
   if (!currentFile.value) return;
+  // VaultFile.id 每次 scan 都会重新生成（不稳定），改用 relPath 匹配更可靠。
   currentFile.value =
-    store.files.find((f) => f.id === currentFile.value!.id) ?? null;
+    store.files.find((f) => f.relPath === currentFile.value!.relPath) ?? null;
 }
 
 const deleteFolderVisible = ref(false);
@@ -993,61 +1242,8 @@ function onContextSelect(key: string) {
       <!-- 拖拽区：填充左右按钮之间的空白区域 -->
       <div class="topbar-drag-spacer"></div>
       <div class="topbar-right">
-        <!-- 编辑模式工具栏 -->
+        <!-- 编辑模式：仅保留取消/保存 -->
         <template v-if="editing">
-          <div class="edit-toolbar" @mousedown.prevent>
-            <button class="fmt-btn" title="增大字号" @click="runFormat('increaseFontSize')"><AArrowUp :size="16" :stroke-width="1.8" /></button>
-            <button class="fmt-btn" title="减小字号" @click="runFormat('decreaseFontSize')"><AArrowDown :size="16" :stroke-width="1.8" /></button>
-            <button class="fmt-btn" title="加粗" @click="runFormat('bold')"><Bold :size="15" :stroke-width="1.8" /></button>
-            <button class="fmt-btn" title="删除线" @click="runFormat('strikeThrough')"><Strikethrough :size="15" :stroke-width="1.8" /></button>
-            <button class="fmt-btn" title="倾斜" @click="runFormat('italic')"><Italic :size="15" :stroke-width="1.8" /></button>
-            <button class="fmt-btn" title="下划线" @click="runFormat('underline')"><Underline :size="15" :stroke-width="1.8" /></button>
-
-            <span class="fmt-sep"></span>
-
-            <div class="fmt-dropdown">
-              <button class="fmt-trigger" title="颜色" @click="toggleDropdown()">
-                <Baseline :size="15" :stroke-width="1.8" />
-                <ChevronDown :size="12" :stroke-width="1.8" />
-              </button>
-              <div v-if="openDropdown === 'color'" class="fmt-menu fmt-color-menu">
-                <div class="fmt-color-section">字体颜色</div>
-                <div class="fmt-color-grid">
-                  <button v-for="c in textColors" :key="'t' + c.value"
-                    class="fmt-color-swatch fmt-text-swatch" :style="{ color: c.value }"
-                    :title="c.label" @click="runFormat('foreColor', c.value)"
-                  >A</button>
-                </div>
-                <div class="fmt-color-section">背景颜色</div>
-                <div class="fmt-color-grid">
-                  <button v-for="c in bgColors" :key="'b' + c.value"
-                    class="fmt-color-swatch fmt-bg-swatch"
-                    :class="{ 'is-none': c.value === 'transparent' }"
-                    :style="{ background: c.value === 'transparent' ? undefined : c.value }"
-                    :title="c.label" @click="runFormat('hiliteColor', c.value)"
-                  >
-                    <svg v-if="c.value === 'transparent'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
-                    <span v-else>A</span>
-                  </button>
-                </div>
-                <div class="fmt-color-footer">
-                  <button class="fmt-reset-btn" @click="resetColor">恢复默认</button>
-                </div>
-              </div>
-            </div>
-
-            <span class="fmt-sep"></span>
-
-            <button class="fmt-btn" title="左对齐" @click="runFormat('justifyLeft')"><AlignLeft :size="15" :stroke-width="1.8" /></button>
-            <button class="fmt-btn" title="居中" @click="runFormat('justifyCenter')"><AlignCenter :size="15" :stroke-width="1.8" /></button>
-            <button class="fmt-btn" title="右对齐" @click="runFormat('justifyRight')"><AlignRight :size="15" :stroke-width="1.8" /></button>
-
-            <span class="fmt-sep"></span>
-
-            <button class="fmt-btn" title="撤销" @click="runFormat('undo')"><Undo2 :size="15" :stroke-width="1.8" /></button>
-            <button class="fmt-btn" title="重做" @click="runFormat('redo')"><Redo2 :size="15" :stroke-width="1.8" /></button>
-            <button class="fmt-btn" title="清空格式" @click="runFormat('removeFormat')"><RotateCcw :size="15" :stroke-width="1.8" /></button>
-          </div>
           <button class="btn" :disabled="saving" @click="cancelEdit">取消</button>
           <button class="btn btn-primary" :disabled="saving" @click="saveEdit">
             {{ saving ? "保存中…" : "保存" }}
@@ -1215,17 +1411,42 @@ function onContextSelect(key: string) {
             ></div>
             <p v-if="loadingContent" class="status">加载中…</p>
             <template v-else-if="currentHtml">
+              <!-- 预览 iframe：安全沙箱（allow-scripts，无 allow-same-origin），父窗口仅 postMessage -->
               <iframe
+                v-show="!editing"
                 ref="iframeRef"
                 class="preview-iframe"
-                :class="{ editing }"
                 :srcdoc="currentHtml"
                 sandbox="allow-scripts"
               />
+              <!-- 编辑 iframe：同域（allow-same-origin），父窗口直接读写 contentDocument。
+                   v-show 互斥避免 sandbox 切换导致的重载闪烁；双 iframe 各保独立 DOM。 -->
+              <iframe
+                v-show="editing"
+                ref="editIframeRef"
+                class="preview-iframe editing"
+                :srcdoc="editHtml"
+                sandbox="allow-scripts allow-same-origin"
+              />
+              <!-- 预览态目录面板（编辑态让位给 EditPanel） -->
               <TocPanel
+                v-if="!editing"
                 :items="tocItems"
                 :active-id="activeTocId"
                 @navigate="navigateToc"
+              />
+              <!-- 编辑态属性面板：始终显示，借鉴 Keynote 三分类设计 -->
+              <EditPanel
+                v-if="editing"
+                :selected="selection"
+                :computed="selectionStyle"
+                :is-text-editing="isTextEditing"
+                @update-style="onUpdateStyle"
+                @delete="onDeleteElement"
+                @duplicate="onDuplicateElement"
+                @reset="onResetStyle"
+                @format="(cmd: string, value?: string) => runFormat(cmd, value)"
+                @bump-font-size="(dir: number) => bumpFontSize(dir as 1 | -1)"
               />
             </template>
           </div>
@@ -1358,6 +1579,17 @@ function onContextSelect(key: string) {
       :danger="true"
       @confirm="onConfirmBatchDelete"
       @cancel="batchDeleteVisible = false"
+    />
+
+    <!-- 编辑态未保存确认：切文件 / 取消编辑时若有改动弹出 -->
+    <ConfirmDialog
+      :visible="unsavedDialogVisible"
+      title="放弃未保存的改动？"
+      message="当前文档有未保存的编辑，离开将丢失这些改动。"
+      confirm-text="放弃"
+      :danger="true"
+      @confirm="onUnsavedConfirm"
+      @cancel="onUnsavedCancel"
     />
   </div>
 </template>
@@ -1501,166 +1733,6 @@ function onContextSelect(key: string) {
 .btn-danger:disabled {
   opacity: 0.45;
   cursor: not-allowed;
-}
-
-/* ---------- 编辑工具栏 ---------- */
-.edit-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-.fmt-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 26px;
-  height: 26px;
-  padding: 0 5px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-.fmt-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-.fmt-sep {
-  width: 1px;
-  height: 16px;
-  margin: 0 4px;
-  background: var(--border);
-}
-.fmt-dropdown {
-  position: relative;
-}
-.fmt-trigger {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 26px;
-  padding: 0 6px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-.fmt-trigger:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-.fmt-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 50;
-  min-width: 92px;
-  padding: 4px;
-  background: var(--bg);
-  border-radius: 8px;
-  box-shadow: rgba(15, 15, 15, 0.05) 0 0 0 1px,
-    rgba(15, 15, 15, 0.1) 0 3px 6px, rgba(15, 15, 15, 0.2) 0 9px 24px;
-}
-.fmt-menu-item {
-  display: block;
-  width: 100%;
-  padding: 5px 10px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-.fmt-menu-item:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-.fmt-menu-item.active {
-  color: var(--accent-blue);
-  font-weight: 500;
-}
-.fmt-color-menu {
-  min-width: 240px;
-}
-.fmt-color-section {
-  padding: 8px 6px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-dim);
-}
-.fmt-color-section:first-child {
-  padding-top: 4px;
-}
-.fmt-color-grid {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 3px;
-  padding: 0 6px;
-}
-.fmt-text-swatch {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 24px;
-  border-radius: 4px;
-  border: none;
-  background: transparent;
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.1s, transform 0.1s;
-}
-.fmt-text-swatch:hover {
-  background: var(--bg-hover);
-  transform: scale(1.1);
-}
-.fmt-bg-swatch {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 24px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  font-size: 13px;
-  font-weight: 700;
-  color: #555;
-  cursor: pointer;
-  transition: transform 0.1s;
-}
-.fmt-bg-swatch:hover {
-  transform: scale(1.1);
-}
-.fmt-bg-swatch.is-none {
-  color: var(--text-faint);
-  background: var(--bg);
-}
-.fmt-color-footer {
-  padding: 8px 6px 6px;
-  margin-top: 4px;
-  border-top: 1px solid var(--border);
-}
-.fmt-reset-btn {
-  width: 100%;
-  padding: 5px 0;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-.fmt-reset-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text);
 }
 
 /* ---------- 主内容分栏 ---------- */

@@ -53,10 +53,12 @@ export function extractToc(html: string): TocItem[] {
  * - 设置 html 最小宽度，防止响应式折叠
  * - 注入脚本：响应父窗口的滚动指令 + 滚动时回报当前章节
  */
-export function preparePreviewHtml(html: string, tocItems: TocItem[]): string {
-  const anchorIds = JSON.stringify(tocItems.map((t) => t.id));
-
-  const injected = `<style id="_preview_fix">
+/**
+ * 预览/编辑共用的文档修正样式。
+ * 隐藏文档自带 .toc、修两栏 grid、隐藏滚动条、PDF 导出保留背景色。
+ * 编辑态也需要这套样式，故抽出共享。
+ */
+const SHARED_FIX_STYLE = `<style id="_preview_fix">
 html,body{margin:0;padding:0;}
 /* min-width:auto：让文档按视口宽度自适应，避免窄窗口下强制出现
    横向滚动条（横向滚动条会在深色文档底部透出一条白线，并在左下/右下
@@ -85,7 +87,25 @@ html{min-width:auto;overflow-x:hidden;}
     print-color-adjust: exact !important;
   }
 }
-</style>
+</style>`;
+
+/**
+ * 把注入内容插进 HTML 文档（优先 </head> 前，其次 <body 前，否则最前）。
+ */
+function injectIntoHtml(html: string, injected: string): string {
+  if (/<\/head>/i.test(html)) {
+    return html.replace(/<\/head>/i, `${injected}$&`);
+  }
+  if (/<body/i.test(html)) {
+    return html.replace(/<body/i, `${injected}$&`);
+  }
+  return injected + html;
+}
+
+export function preparePreviewHtml(html: string, tocItems: TocItem[]): string {
+  const anchorIds = JSON.stringify(tocItems.map((t) => t.id));
+
+  const injected = `${SHARED_FIX_STYLE}
 <script id="_preview_nav">
 (function(){
   var ids=${anchorIds};
@@ -220,11 +240,34 @@ html{min-width:auto;overflow-x:hidden;}
 })();
 <\/script>`;
 
-  if (/<\/head>/i.test(html)) {
-    return html.replace(/<\/head>/i, `${injected}$&`);
-  }
-  if (/<body/i.test(html)) {
-    return html.replace(/<body/i, `${injected}$&`);
-  }
-  return injected + html;
+  return injectIntoHtml(html, injected);
+}
+
+/**
+ * 准备编辑模式的 HTML。
+ *
+ * 编辑态使用同域 iframe（allow-same-origin），父窗口通过 contentDocument 直接操作 DOM，
+ * 因此**不注入**预览态的 postMessage 脚本（_preview_nav）——滚动定位、文字编辑、
+ * 序列化保存全部由编辑引擎（src/editor/*）在父窗口侧完成。
+ *
+ * 仅注入：
+ * 1. 共用修正样式（SHARED_FIX_STYLE：隐藏 .toc / 滚动条 / PDF 背景）
+ * 2. 危险操作拦截脚本（best-effort：拦截导航/表单/弹窗，见 src/editor/guard.ts）
+ *
+ * 文档自带的 `<script>`（Tailwind/ECharts 等）会照常运行，保证渲染保真。
+ */
+export function prepareEditHtml(html: string): string {
+  // guard 脚本延迟导入：避免 html.ts（工具模块）直接耦合编辑引擎常量
+  // 这里直接内联构建，与 guard.ts 的 buildGuardScript 保持一致
+  const guardScript = `<script id="_leaf_editor_guard">
+(function(){
+  try { window.open = function(){ return null; }; } catch(e){}
+  document.addEventListener("submit", function(e){ e.preventDefault(); e.stopPropagation(); }, true);
+  document.addEventListener("click", function(e){
+    var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+    if (a && a.getAttribute("target") !== "_blank") { e.preventDefault(); }
+  }, true);
+})();
+<\/script>`;
+  return injectIntoHtml(html, SHARED_FIX_STYLE + guardScript);
 }
