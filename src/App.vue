@@ -732,65 +732,67 @@ async function onExportPdf() {
   const file = currentFile.value;
   if (!file || exportingPdf.value) return;
   exportingPdf.value = true;
+
+  // ── 跨平台 DOM 预处理：隐藏 Leaf UI，仅保留文档内容 ──
+  // 提取文档的 head + body，拼接为独立页面内容
+  const headMatch = currentHtml.value.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+  const bodyMatch = currentHtml.value.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  const docHtml = (headMatch?.[1] || "") + (bodyMatch?.[1] || "");
+
+  // 隐藏整个 #app（Leaf UI 的 Vue 挂载点），确保 PDF 没有任何残留空间
+  const appEl = document.getElementById("app") as HTMLElement | null;
+  const origAppDisplay = appEl?.style.display || "";
+  if (appEl) appEl.style.display = "none";
+
+  const origBodyBg = document.body.style.background;
+  const origBodyMargin = document.body.style.margin;
+  const origBodyPadding = document.body.style.padding;
+  document.body.style.background = "#fff";
+  document.body.style.margin = "0";
+  document.body.style.padding = "0";
+
+  // 插入文档包装层（正常流，白底，完整展开无截断）
+  const wrapper = document.createElement("div");
+  wrapper.style.cssText = "background:#fff;padding:0;margin:0;";
+  wrapper.innerHTML = docHtml;
+  document.body.appendChild(wrapper);
+  await nextTick();
+
+  // ── 导出 ──
+  const defaultName = (file.title || file.fileName || "文档").replace(/[\\/:*?"<>|]/g, "_");
+
   try {
     if (isMac.value) {
-      // macOS：createPDFWithConfiguration 捕捉整个可滚动区域。
-      // 隐藏 Leaf UI 元素，插入文档包装层（白底），确保 PDF 只有文档内容。
-      const headMatch = currentHtml.value.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
-      const bodyMatch = currentHtml.value.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-      const docHtml = (headMatch?.[1] || "") + (bodyMatch?.[1] || "");
-
-      // 隐藏整个 #app（Leaf UI 的 Vue 挂载点），确保 PDF 没有任何残留空间
-      const appEl = document.getElementById("app") as HTMLElement | null;
-      const origAppDisplay = appEl?.style.display || "";
-      if (appEl) appEl.style.display = "none";
-
-      const origBodyBg = document.body.style.background;
-      const origBodyMargin = document.body.style.margin;
-      const origBodyPadding = document.body.style.padding;
-      document.body.style.background = "#fff";
-      document.body.style.margin = "0";
-      document.body.style.padding = "0";
-
-      // 插入文档包装层（正常流，白底，完整展开）
-      const wrapper = document.createElement("div");
-      wrapper.style.cssText = "background:#fff;padding:0;margin:0;";
-      wrapper.innerHTML = docHtml;
-      document.body.appendChild(wrapper);
-      await nextTick();
-
-      const defaultName = (file.title || file.fileName || "文档").replace(/[\\/:*?"<>|]/g, "_");
+      // macOS：createPDFWithConfiguration 捕捉整个可滚动区域
       const target = await save({
         defaultPath: `${defaultName}.pdf`,
         filters: [{ name: "PDF", extensions: ["pdf"] }],
       });
-      try {
-        if (target) {
-          await printToPdf(target);
-          showToast("已导出到 " + target, "info");
-        }
-      } finally {
-        // 恢复状态
-        wrapper.remove();
-        document.body.style.background = origBodyBg;
-        document.body.style.margin = origBodyMargin;
-        document.body.style.padding = origBodyPadding;
-        if (appEl) appEl.style.display = origAppDisplay;
+      if (target) {
+        await printToPdf(target);
+        showToast("已导出到 " + target, "info");
       }
     } else {
-      // Windows：静默生成 PDF
-      const defaultName = (file.title || file.fileName || "文档").replace(/[\\/:*?"<>|]/g, "_");
+      // Windows：WebView2 PrintToPdf 静默生成
       const target = await save({
         defaultPath: `${defaultName}.pdf`,
         filters: [{ name: "PDF", extensions: ["pdf"] }],
       });
-      if (!target) return;
-      await printToPdf(target);
-      showToast("已导出到 " + target, "info");
+      if (target) {
+        await printToPdf(target);
+        showToast("已导出到 " + target, "info");
+      }
     }
   } catch (e) {
     showToast("导出失败: " + String(e), "error");
   } finally {
+    // ── 恢复 Leaf UI ──
+    wrapper.remove();
+    document.body.style.background = origBodyBg;
+    document.body.style.margin = origBodyMargin;
+    document.body.style.padding = origBodyPadding;
+    if (appEl) appEl.style.display = origAppDisplay;
+
     exportingPdf.value = false;
   }
 }

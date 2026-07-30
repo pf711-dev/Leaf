@@ -142,6 +142,15 @@ unsafe fn print_via_webview2(
         .SetShouldPrintBackgrounds(true)
         .map_err(|e| format!("设置打印背景失败: {}", e))?;
     let _ = settings.SetShouldPrintHeaderAndFooter(false);
+    // 大页面尺寸 + 零边距：让整个文档内容渲染在单个"页面"上，
+    // 由 @media print CSS 负责实际的版面布局（宽度自适应、分页等）。
+    let _ = settings.SetPageWidth(50.0);
+    let _ = settings.SetPageHeight(500.0);
+    let _ = settings.SetMarginTop(0.0);
+    let _ = settings.SetMarginBottom(0.0);
+    let _ = settings.SetMarginLeft(0.0);
+    let _ = settings.SetMarginRight(0.0);
+    let _ = settings.SetScaleFactor(1.0);
 
     let path_h = windows::core::HSTRING::from(out_path);
 
