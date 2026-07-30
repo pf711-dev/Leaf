@@ -10,14 +10,12 @@
 //!
 //! 设计要点：
 //! - `with_webview` 闭包在主线程执行（Tauri 会 dispatch 过去）。
-//! - macOS 用 `oneshot` channel + `block` crate 处理异步 completion handler，
-//!   避免在主线程阻塞等待（会导致死锁）。
-//! - Windows 结果用 `Arc<Mutex<Option<Result>>>` 跨闭包边界带出。
+//! - Windows / macOS 均采用 `oneshot` channel + tokio timeout 模式：
+//!   闭包内发起异步操作（PrintToPdf / createPDF），通过 oneshot 将结果传回，
+//!   在 async 上下文中 await 等待结果，不依赖 `with_webview` 的同步语义。
 
 #[cfg(target_os = "windows")]
 use std::path::PathBuf;
-#[cfg(target_os = "windows")]
-use std::sync::{Arc, Mutex};
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use tauri::Manager;
 
@@ -73,6 +71,8 @@ async fn print_to_pdf_windows(
     app: &tauri::AppHandle,
     out_path: String,
 ) -> Result<(), String> {
+    use tokio::sync::oneshot;
+
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "找不到主窗口".to_string())?;
@@ -84,23 +84,26 @@ async fn print_to_pdf_windows(
             .map_err(|e| format!("创建目录失败: {}", e))?;
     }
 
-    // 闭包执行在主线程，结果通过共享容器带出。
-    let result: Arc<Mutex<Option<Result<(), String>>>> = Arc::new(Mutex::new(None));
-    let result_clone = Arc::clone(&result);
+    // oneshot channel：闭包在主线程执行后通过 channel 将结果传回，
+    // 我们在 async 上下文中 await 等待，不依赖 with_webview 的同步语义。
+    let (tx, rx) = oneshot::channel::<Result<(), String>>();
 
-    // with_webview 在主线程同步执行闭包；闭包内阻塞等待 COM 回调完成后才返回。
     window
         .with_webview(move |webview| {
             let r = unsafe { print_via_webview2(&webview, &out_path) };
-            *result_clone.lock().unwrap() = Some(r);
+            let _ = tx.send(r);
         })
         .map_err(|e| format!("访问 WebView 失败: {}", e))?;
 
-    // with_webview 是同步阻塞的，执行到这里时闭包已完成。
-    let mut guard = result.lock().unwrap();
-    guard
-        .take()
-        .unwrap_or_else(|| Err("PDF 导出未返回结果".to_string()))
+    // 在 async 上下文中等待 completion handler 返回结果，
+    // 设置 30 秒超时防止永久阻塞。
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        rx,
+    )
+    .await
+    .map_err(|_| "PDF 生成超时（30 秒）".to_string())?
+    .map_err(|e| format!("channel 关闭: {}", e))?
 }
 
 /// 在 `with_webview` 闭包内（主线程）调用 WebView2 PrintToPdf。
