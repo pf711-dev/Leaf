@@ -116,12 +116,11 @@ unsafe fn print_via_webview2(
     out_path: &str,
 ) -> Result<(), String> {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2_7, ICoreWebView2PrintSettings,
+        ICoreWebView2_7, ICoreWebView2Environment6, ICoreWebView2PrintSettings,
         ICoreWebView2PrintToPdfCompletedHandler,
     };
     use webview2_com::PrintToPdfCompletedHandler;
-    use windows::core::Interface;
-    use windows::Win32::Foundation::{BOOL, HRESULT};
+    use windows::core::{BOOL, HRESULT, Interface};
 
     let controller = webview.controller();
     let core = controller
@@ -133,7 +132,10 @@ unsafe fn print_via_webview2(
     })?;
 
     let environment = webview.environment();
-    let settings: ICoreWebView2PrintSettings = environment
+    let env6: ICoreWebView2Environment6 = environment.cast().map_err(|_| {
+        "WebView2 版本过低，CreatePrintSettings 需 ≥ 1.0.992.28".to_string()
+    })?;
+    let settings: ICoreWebView2PrintSettings = env6
         .CreatePrintSettings()
         .map_err(|e| format!("创建 PrintSettings 失败: {}", e))?;
     settings
